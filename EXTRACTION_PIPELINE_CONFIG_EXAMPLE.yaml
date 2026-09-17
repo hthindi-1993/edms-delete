@@ -1,0 +1,33 @@
+rawTables:
+  rawDbMain: db_hasan
+  rawTableMetadataKeep: tbl_indp_edms_files_metadata_ken
+  rawDbFileStateStore: db_edms_files_upload_ref
+  rawTableFileStateStore: tbl_edms_files_ken_test_hasan_state
+  rawTableDeleteTrackerTbl: tbl_edms_files_ken_delete_event
+  rawTableResurrectTrackerTbl: tbl_edms_files_ken_resurrect_event
+
+dataModelViews:
+  schemaSpace: cdf_cdm
+  dmExternalId: CogniteCore
+  viewName: CogniteFile
+  version: v1
+  instanceSpace: sp_dat_edms_files_ken_test_hasan
+  instanceExternalIdPrefix: edmstest_
+
+vmProperties:
+  targetFolderPath: C:\Data\edms\target\ken_test_hasan\
+  dwgDropFolderPath: C:\Data\edms\dwg-drop\ken_test_hasan\
+
+# Optional. If omitted, logs go to the console only (INFO).
+logger:
+  console:
+    level: INFO
+  file:
+    level: DEBUG
+    # Prefer an absolute path for Task Scheduler / .exe (cwd may not be the install folder).
+    path: C:\Data\edms\logs\ken\edms-deletes-ken.log
+    # true: one file per run -> edms-deletes-ken_<run_id>.log (includes RunId in the name)
+    # false: append all runs to a single file
+    per_run: true
+    # Delete matching log files older than N days in the same folder; 0 = keep all
+    retention: 0
