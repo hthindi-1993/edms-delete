@@ -66,25 +66,32 @@ class EdmsDeleteRunner:
         )
 
         delete_empty_timestamp_records_list = delete_tracker_tbl_df[
-        delete_tracker_tbl_df['DeletedInstanceTimestamp'].isna() & 
-        delete_tracker_tbl_df['DeletedStateStoreRecordTimestamp'].isna() & 
-        delete_tracker_tbl_df['DeletedTargetFolderPathTimestamp'].isna() & 
-        delete_tracker_tbl_df['DeletedDwgDropFolderPathTimestamp'].isna()].index.tolist()
+            delete_tracker_tbl_df["DeletedInstanceTimestamp"].isna()
+            & delete_tracker_tbl_df["DeletedStateStoreRecordTimestamp"].isna()
+            & delete_tracker_tbl_df["DeletedTargetFolderPathTimestamp"].isna()
+            & delete_tracker_tbl_df["DeletedDwgDropFolderPathTimestamp"].isna()
+        ].index.tolist()
 
-    if len(delete_empty_timestamp_records_list) > 0:
-        logger.info(f"Deleting records with empty timestamps:\n")
-        rows_before_delete_tracker_df = len(delete_tracker_tbl_df)
-        self.client.raw.rows.delete(self.config.raw_db_main, 
-                        self.config.raw_table_delete_tracker,
-                        delete_empty_timestamp_records_list
-                        )
-        delete_tracker_tbl_df = load_raw_tbl(self.client, self.config.raw_db_main, self.config.raw_table_delete_tracker)
-        rows_after_delete_tracker_df = len(delete_tracker_tbl_df)
-        if rows_after_delete_tracker_df < rows_before_delete_tracker_df:
-            logger.info(f"Deleted {rows_before_delete_tracker_df - rows_after_delete_tracker_df} records with empty timestamps.\n")
-        else:
-            logger.info("Failed to delete records with empty timestamps.")
-            logger.info("Proceeding with rest of workflow")
+        if len(delete_empty_timestamp_records_list) > 0:
+            logger.info("Deleting records with empty timestamps:")
+            rows_before_delete_tracker_df = len(delete_tracker_tbl_df)
+            self.client.raw.rows.delete(
+                self.config.raw_db_main,
+                self.config.raw_table_delete_tracker,
+                delete_empty_timestamp_records_list,
+            )
+            delete_tracker_tbl_df = load_raw_tbl(
+                self.client, self.config.raw_db_main, self.config.raw_table_delete_tracker
+            )
+            rows_after_delete_tracker_df = len(delete_tracker_tbl_df)
+            if rows_after_delete_tracker_df < rows_before_delete_tracker_df:
+                logger.info(
+                    "Deleted %s records with empty timestamps.",
+                    rows_before_delete_tracker_df - rows_after_delete_tracker_df,
+                )
+            else:
+                logger.info("Failed to delete records with empty timestamps.")
+                logger.info("Proceeding with rest of workflow")
 
         resurrect_tracker_tbl_df = get_delete_state_tracker_tbl(
             self.client,
