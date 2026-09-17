@@ -16,7 +16,7 @@ __pycache__/
 
 # PyInstaller / cogex
 build/
-dist/
+# dist/
 *.spec
 
 # Tools
