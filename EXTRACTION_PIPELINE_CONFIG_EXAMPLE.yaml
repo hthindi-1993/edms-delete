@@ -2,7 +2,7 @@ rawTables:
   rawDbMain: db_hasan
   rawTableMetadataKeep: tbl_indp_edms_files_metadata_ken
   rawDbFileStateStore: db_edms_files_upload_ref
-  rawTableFileStateStore: tbl_edms_files_ken_test_hasan_state
+  rawTableFileStateStore: tbl_edms_files_ken_state
   rawTableDeleteTrackerTbl: tbl_edms_files_ken_delete_event
   rawTableResurrectTrackerTbl: tbl_edms_files_ken_resurrect_event
 
@@ -11,12 +11,12 @@ dataModelViews:
   dmExternalId: CogniteCore
   viewName: CogniteFile
   version: v1
-  instanceSpace: sp_dat_edms_files_ken_test_hasan
-  instanceExternalIdPrefix: edmstest_
+  instanceSpace: sp_dat_edms_files_ken
+  instanceExternalIdPrefix: edms_
 
 vmProperties:
-  targetFolderPath: C:\Data\edms\target\ken_test_hasan\
-  dwgDropFolderPath: C:\Data\edms\dwg-drop\ken_test_hasan\
+  targetFolderPath: C:\Data\edms\target\ken\
+  dwgDropFolderPath: C:\Data\edms\dwg-drop\ken\
 
 # Optional. If omitted, logs go to the console only (INFO).
 logger:
