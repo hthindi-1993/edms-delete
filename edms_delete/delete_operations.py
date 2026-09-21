@@ -5,8 +5,9 @@ from typing import Any
 
 import pandas as pd
 from cognite.client import CogniteClient
-from cognite.client.data_classes.data_modeling import NodeId, ViewId
+from cognite.client.data_classes.data_modeling import NodeId
 
+from edms_delete.data_access import load_instances_files
 from edms_delete.paths import get_files_in_directory
 
 logger = logging.getLogger(__name__)
@@ -28,27 +29,26 @@ def delete_file_instances_operation(
     if nodes_to_delete:
         client.data_modeling.instances.delete(nodes=nodes_to_delete)
 
-    after_df = (
-        client.data_modeling.instances.list(
-            instance_type="node",
-            space=dm_instance_space,
-            sources=[ViewId(space=dm_schema_space, external_id=dm_view_name, version=dm_version)],
-            limit=None,
-        )
-        .to_pandas()[["external_id", "space"]]
+    after_df = load_instances_files(
+        client,
+        dm_instance_space,
+        dm_schema_space,
+        dm_view_name,
+        dm_version,
     )
-    after_df["key"] = after_df["external_id"]
-    after_df = after_df.set_index("key")
+
+    before_ids = before_df["external_id"].dropna().tolist() if "external_id" in before_df.columns else []
+    after_ids = after_df["external_id"].dropna().tolist() if "external_id" in after_df.columns else []
 
     logger.info(
         "Deleted %s instances from view %s (space=%s, version=%s).",
-        len(before_df) - len(after_df),
+        len(before_ids) - len(after_ids),
         dm_view_name,
         dm_schema_space,
         dm_version,
     )
 
-    actually_deleted_instances = list(set(before_df["external_id"].tolist()) - set(after_df["external_id"].tolist()))
+    actually_deleted_instances = list(set(before_ids) - set(after_ids))
     failed_to_delete_instances = list(set(delete_list) - set(actually_deleted_instances))
 
     return {

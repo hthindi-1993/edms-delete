@@ -71,15 +71,33 @@ def load_instances_files(
     dm_view_name: str,
     dm_version: str,
 ) -> pd.DataFrame:
-    instances = (
-        client.data_modeling.instances.list(
-            instance_type="node",
-            space=dm_instance_space,
-            sources=[ViewId(space=dm_schema_space, external_id=dm_view_name, version=dm_version)],
-            limit=None,
-        )
-        .to_pandas()[["external_id", "space"]]
+    empty = pd.DataFrame(columns=["external_id", "space"])
+    empty["key"] = pd.Series(dtype="object")
+    empty = empty.set_index("key")
+
+    instances_list = client.data_modeling.instances.list(
+        instance_type="node",
+        space=dm_instance_space,
+        sources=[ViewId(space=dm_schema_space, external_id=dm_view_name, version=dm_version)],
+        limit=None,
     )
+    if len(instances_list) == 0:
+        return empty
+
+    instances = instances_list.to_pandas()
+    if "externalId" in instances.columns and "external_id" not in instances.columns:
+        instances = instances.rename(columns={"externalId": "external_id"})
+
+    if not {"external_id", "space"}.issubset(instances.columns):
+        logger.warning(
+            "Instance list for space %s / view %s returned unexpected columns: %s",
+            dm_instance_space,
+            dm_view_name,
+            list(instances.columns),
+        )
+        return empty
+
+    instances = instances[["external_id", "space"]].copy()
     instances["key"] = instances["external_id"]
     return instances.set_index("key")
 
