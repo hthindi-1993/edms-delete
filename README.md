@@ -304,12 +304,13 @@ If a tracker table is missing or empty, a single `DummyRowKey` row is inserted s
 
 ## Resurrection detection
 
-After inserting the delete-state snapshot for `Cognite_Delete == 1` rows, the runner:
+Resurrection is evaluated on every run that has metadata, **including runs with zero `Cognite_Delete == 1` rows** (delete-tracker insert is skipped in that case; resurrection still runs).
 
-1. Builds a second state snapshot for metadata where `Cognite_Delete ≠ 1`.
-2. Computes the intersection of `primary_key` values between that snapshot and the (full) delete tracker.
-3. If the intersection is empty → logs “No files were resurrected” and stops the resurrection branch.
-4. If non-empty → removes any dummy row from the resurrect tracker and inserts the **non-deleted** state snapshot into the resurrect tracker.
+1. Optionally inserts a delete-state snapshot for `Cognite_Delete == 1` rows (skipped when none exist).
+2. Builds a state snapshot for metadata where `Cognite_Delete ≠ 1`.
+3. Computes the intersection of `primary_key` values between that snapshot and the delete tracker (string-normalized).
+4. If the intersection is empty → logs “No files were resurrected” and stops the resurrection branch.
+5. If non-empty → removes any dummy row from the resurrect tracker and inserts **only the intersecting (resurrected) rows** into the resurrect tracker.
 
 Interpretation: a `primary_key` that already appears in delete-tracker history and is again present in metadata **without** the delete flag is treated as a resurrection signal for auditing. Resurrection recording does not undelete anything; it only writes audit rows.
 

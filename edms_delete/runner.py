@@ -199,29 +199,29 @@ class EdmsDeleteRunner:
             runid,
             True,
         )
-        if generate_state_results is None:
-            return
+        if generate_state_results is not None:
+            logger.info(
+                "Inserting preliminary state into %s.%s (%s rows in tracker before insert).",
+                self.config.raw_db_main,
+                self.config.raw_table_delete_tracker,
+                len(delete_tracker_tbl_df),
+            )
 
-        logger.info(
-            "Inserting preliminary state into %s.%s (%s rows in tracker before insert).",
-            self.config.raw_db_main,
-            self.config.raw_table_delete_tracker,
-            len(delete_tracker_tbl_df),
-        )
+            self.client.raw.rows.insert_dataframe(
+                db_name=self.config.raw_db_main,
+                table_name=self.config.raw_table_delete_tracker,
+                dataframe=generate_state_results,
+            )
 
-        self.client.raw.rows.insert_dataframe(
-            db_name=self.config.raw_db_main,
-            table_name=self.config.raw_table_delete_tracker,
-            dataframe=generate_state_results,
-        )
+            self._remove_dummy_row(self.config.raw_table_delete_tracker)
 
-        self._remove_dummy_row(self.config.raw_table_delete_tracker)
-
-        delete_tracker_tbl_df = load_raw_tbl(
-            self.client,
-            self.config.raw_db_main,
-            self.config.raw_table_delete_tracker,
-        )
+            delete_tracker_tbl_df = load_raw_tbl(
+                self.client,
+                self.config.raw_db_main,
+                self.config.raw_table_delete_tracker,
+            )
+        else:
+            logger.info("No Cognite_Delete == 1 rows; skipping delete-tracker insert and continuing with resurrection.")
 
         generate_nondeleted_state_results = generate_state(
             metadata_tbl_df,
@@ -236,24 +236,28 @@ class EdmsDeleteRunner:
         )
 
         if generate_nondeleted_state_results is None:
+            logger.info("No Cognite_Delete <> 1 rows; nothing to evaluate for resurrection.")
             return
 
-        resurrected_files_pk = list(
-            set(generate_nondeleted_state_results["primary_key"].tolist())
-            & set(delete_tracker_tbl_df["primary_key"].tolist())
-        )
+        nondeleted_pks = set(generate_nondeleted_state_results["primary_key"].astype(str))
+        delete_tracker_pks = set(delete_tracker_tbl_df["primary_key"].astype(str))
+        resurrected_files_pk = list(nondeleted_pks & delete_tracker_pks)
 
         if not resurrected_files_pk:
             logger.info("No files were resurrected.")
             return
 
+        resurrected_df = generate_nondeleted_state_results[
+            generate_nondeleted_state_results["primary_key"].astype(str).isin(resurrected_files_pk)
+        ].copy()
+
         self._remove_dummy_row(self.config.raw_table_resurrect_tracker, resurrect_tracker_tbl_df)
 
-        logger.info("Resurrected files count: %s", len(resurrected_files_pk))
+        logger.info("Resurrected files count: %s", len(resurrected_df))
         self.client.raw.rows.insert_dataframe(
             db_name=self.config.raw_db_main,
             table_name=self.config.raw_table_resurrect_tracker,
-            dataframe=generate_nondeleted_state_results,
+            dataframe=resurrected_df,
         )
 
     def _remove_dummy_row(
