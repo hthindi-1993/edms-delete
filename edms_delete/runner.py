@@ -253,6 +253,32 @@ class EdmsDeleteRunner:
 
         self._remove_dummy_row(self.config.raw_table_resurrect_tracker, resurrect_tracker_tbl_df)
 
+        resurrect_tracker_tbl_df = load_raw_tbl(
+            self.client,
+            self.config.raw_db_main,
+            self.config.raw_table_resurrect_tracker,
+        )
+        resurrected_source_ids = {
+            source_id
+            for source_id in resurrected_df["sourceId"].dropna().astype(str).tolist()
+            if source_id and source_id != "N/A"
+        }
+        if resurrected_source_ids and "sourceId" in resurrect_tracker_tbl_df.columns:
+            keys_to_replace = resurrect_tracker_tbl_df.index[
+                resurrect_tracker_tbl_df["sourceId"].astype(str).isin(resurrected_source_ids)
+            ].tolist()
+            if keys_to_replace:
+                logger.info(
+                    "Removing %s existing resurrect-tracker row(s) for %s matching sourceId value(s).",
+                    len(keys_to_replace),
+                    len(resurrected_source_ids),
+                )
+                self.client.raw.rows.delete(
+                    db_name=self.config.raw_db_main,
+                    table_name=self.config.raw_table_resurrect_tracker,
+                    key=keys_to_replace,
+                )
+
         logger.info("Resurrected files count: %s", len(resurrected_df))
         self.client.raw.rows.insert_dataframe(
             db_name=self.config.raw_db_main,

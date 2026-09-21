@@ -310,7 +310,9 @@ Resurrection is evaluated on every run that has metadata, **including runs with 
 2. Builds a state snapshot for metadata where `Cognite_Delete ≠ 1`.
 3. Computes the intersection of `primary_key` values between that snapshot and the delete tracker (string-normalized).
 4. If the intersection is empty → logs “No files were resurrected” and stops the resurrection branch.
-5. If non-empty → removes any dummy row from the resurrect tracker and inserts **only the intersecting (resurrected) rows** into the resurrect tracker.
+5. If non-empty → removes any dummy row from the resurrect tracker, **deletes existing resurrect-tracker rows whose `sourceId` matches any `sourceId` in the new resurrected set**, then inserts the intersecting (resurrected) rows.
+
+This replace-by-`sourceId` step keeps one current resurrect event per file instead of appending a new `{RunId}|{primary_key}` row every run while the file remains `Cognite_Delete ≠ 1`.
 
 Interpretation: a `primary_key` that already appears in delete-tracker history and is again present in metadata **without** the delete flag is treated as a resurrection signal for auditing. Resurrection recording does not undelete anything; it only writes audit rows.
 
