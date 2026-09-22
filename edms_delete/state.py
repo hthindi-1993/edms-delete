@@ -162,11 +162,11 @@ def generate_state(
             axis=1,
         )
         metadata_tbl["TargetFolderPathDetectedTimestamp"] = metadata_tbl.apply(
-            lambda r: get_current_time() if pd.notnull(r["target_filepath_Exist"]) else None,
+            lambda r: get_current_time() if not r["target_filepath_Exist"] else None,
             axis=1,
         )
         metadata_tbl["DwgDropFolderPathDetectedTimestamp"] = metadata_tbl.apply(
-            lambda r: get_current_time() if pd.notnull(r["dwg_drop_path_Exist"]) else None,
+            lambda r: get_current_time() if not r["dwg_drop_path_Exist"] else None,
             axis=1,
         )
 
