@@ -30,7 +30,7 @@ def load_raw_tbl(
             last_updated_time_in_index=last_updated_time,
         )
         if "Cognite_Id" in sample_row.columns.tolist():
-            columns_to_fetch = ["File_Type_Short_Name", "Cognite_Delete", "Cognite_Id", "primary_key"]
+            columns_to_fetch = ["File_Type_Short_Name", "Cognite_Delete", "Cognite_Ingest", "Cognite_Id", "primary_key"]
             tbl = client.raw.rows.retrieve_dataframe(
                 db_name=raw_db_name,
                 table_name=raw_tbl_name,
@@ -40,7 +40,7 @@ def load_raw_tbl(
                 last_updated_time_in_index=last_updated_time,
             )
         else:
-            columns_to_fetch = ["File_Type_Short_Name", "Cognite_Delete", "primary_key"]
+            columns_to_fetch = ["File_Type_Short_Name", "Cognite_Delete", "Cognite_Ingest", "primary_key"]
             tbl = client.raw.rows.retrieve_dataframe(
                 db_name=raw_db_name,
                 table_name=raw_tbl_name,
@@ -132,6 +132,7 @@ def get_delete_state_tracker_tbl(
         "DoesTargetFolderPathExistAfterStatus": "N/A",
         "CurrentDeleteFlag": "N/A",
         "Cognite_Id": "N/A",
+        "Cognite_Ingest": "N/A",
     }
     if cognite_delete_flag:
         custom_dummy_values.update(

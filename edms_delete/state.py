@@ -35,7 +35,7 @@ def generate_state(
             logger.info("No metadata available after filtering for Cognite_Delete <> 1 rows.")
             return None
 
-    required_columns = ["File_Type_Short_Name", "Cognite_Delete", "primary_key"]
+    required_columns = ["File_Type_Short_Name", "Cognite_Delete", "Cognite_Ingest", "primary_key"]
     has_cognite_id = "Cognite_Id" in metadata_tbl.columns
 
     if has_cognite_id:
