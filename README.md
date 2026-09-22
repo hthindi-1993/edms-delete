@@ -298,7 +298,10 @@ Used when files that were previously tracked for deletion are found again with `
 
 ### Dummy rows
 
-If a tracker table is missing or empty, a single `DummyRowKey` row is inserted so the table has a known schema. That dummy row is removed once real data is written.
+If a tracker table is missing or empty, a single `DummyRowKey` row is inserted so the table has a known schema.
+
+- **Delete tracker:** the dummy row is removed once real data is written.
+- **Resurrect tracker:** the dummy row is always kept. If it is missing from a non-empty table, it is re-inserted on load.
 
 ---
 
@@ -309,10 +312,10 @@ Resurrection is evaluated on every run that has metadata, **including runs with 
 1. Optionally inserts a delete-state snapshot for `Cognite_Delete == 1` rows (skipped when none exist).
 2. Builds a state snapshot for metadata where `Cognite_Delete ≠ 1`.
 3. Computes the intersection of `primary_key` values between that snapshot and the delete tracker (string-normalized).
-4. If the intersection is empty → logs “No files were resurrected” and stops the resurrection branch.
-5. If non-empty → removes any dummy row from the resurrect tracker, **deletes existing resurrect-tracker rows whose `sourceId` matches any `sourceId` in the new resurrected set**, then inserts the intersecting (resurrected) rows.
+4. If the intersection is empty → logs “No files were resurrected” and leaves the resurrect tracker unchanged.
+5. If non-empty → **deletes all existing resurrect-tracker rows except `DummyRowKey`**, then inserts the intersecting (resurrected) rows.
 
-This replace-by-`sourceId` step keeps one current resurrect event per file instead of appending a new `{RunId}|{primary_key}` row every run while the file remains `Cognite_Delete ≠ 1`.
+Clearing the table first keeps it as a snapshot of the current resurrected set instead of appending a new `{RunId}|{primary_key}` row every run or leaving stale rows for files that are no longer resurrected. `DummyRowKey` stays so the table never loses its schema row.
 
 Interpretation: a `primary_key` that already appears in delete-tracker history and is again present in metadata **without** the delete flag is treated as a resurrection signal for auditing. Resurrection recording does not undelete anything; it only writes audit rows.
 
