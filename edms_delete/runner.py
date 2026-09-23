@@ -64,39 +64,6 @@ class EdmsDeleteRunner:
             self.config.raw_table_delete_tracker,
             True,
         )
-
-        delete_empty_timestamp_records_list = [
-            key
-            for key in delete_tracker_tbl_df[
-                delete_tracker_tbl_df["DeletedInstanceTimestamp"].isna()
-                & delete_tracker_tbl_df["DeletedStateStoreRecordTimestamp"].isna()
-                & delete_tracker_tbl_df["DeletedTargetFolderPathTimestamp"].isna()
-                & delete_tracker_tbl_df["DeletedDwgDropFolderPathTimestamp"].isna()
-            ].index.astype(str).tolist()
-            if key != "DummyRowKey"
-        ]
-
-        if len(delete_empty_timestamp_records_list) > 0:
-            logger.info("Deleting records with empty timestamps:")
-            rows_before_delete_tracker_df = len(delete_tracker_tbl_df)
-            self.client.raw.rows.delete(
-                self.config.raw_db_main,
-                self.config.raw_table_delete_tracker,
-                delete_empty_timestamp_records_list,
-            )
-            delete_tracker_tbl_df = load_raw_tbl(
-                self.client, self.config.raw_db_main, self.config.raw_table_delete_tracker
-            )
-            rows_after_delete_tracker_df = len(delete_tracker_tbl_df)
-            if rows_after_delete_tracker_df < rows_before_delete_tracker_df:
-                logger.info(
-                    "Deleted %s records with empty timestamps.",
-                    rows_before_delete_tracker_df - rows_after_delete_tracker_df,
-                )
-            else:
-                logger.info("Failed to delete records with empty timestamps.")
-                logger.info("Proceeding with rest of workflow")
-
         resurrect_tracker_tbl_df = get_delete_state_tracker_tbl(
             self.client,
             self.config.raw_db_main,
@@ -105,12 +72,24 @@ class EdmsDeleteRunner:
         )
 
         if not metadata_tbl_df.empty:
-            self._run_state_and_resurrection(
+            self._run_resurrection(
                 metadata_tbl_df=metadata_tbl_df,
                 statestore_tbl_df=statestore_tbl_df,
                 cognite_file_tbl_df=cognite_file_tbl_df,
                 delete_tracker_tbl_df=delete_tracker_tbl_df,
                 resurrect_tracker_tbl_df=resurrect_tracker_tbl_df,
+                nowtime=nowtime,
+                runid=runid,
+            )
+
+        delete_tracker_tbl_df = self._cleanup_empty_timestamp_rows(delete_tracker_tbl_df)
+
+        if not metadata_tbl_df.empty:
+            self._insert_preliminary_delete_state(
+                metadata_tbl_df=metadata_tbl_df,
+                statestore_tbl_df=statestore_tbl_df,
+                cognite_file_tbl_df=cognite_file_tbl_df,
+                delete_tracker_tbl_df=delete_tracker_tbl_df,
                 nowtime=nowtime,
                 runid=runid,
             )
@@ -182,7 +161,7 @@ class EdmsDeleteRunner:
 
         self._finalize_run(delete_tracker_tbl_df, runid)
 
-    def _run_state_and_resurrection(
+    def _run_resurrection(
         self,
         metadata_tbl_df: pd.DataFrame,
         statestore_tbl_df: pd.DataFrame,
@@ -192,39 +171,6 @@ class EdmsDeleteRunner:
         nowtime: str,
         runid: str,
     ) -> None:
-        generate_state_results = generate_state(
-            metadata_tbl_df,
-            self.config.dwg_drop_folder_path,
-            self.config.target_folder_path,
-            self.config.dm_instance_external_id_prefix,
-            cognite_file_tbl_df,
-            statestore_tbl_df,
-            nowtime,
-            runid,
-            True,
-        )
-        if generate_state_results is not None:
-            logger.info(
-                "Inserting preliminary state into %s.%s (%s rows in tracker before insert).",
-                self.config.raw_db_main,
-                self.config.raw_table_delete_tracker,
-                len(delete_tracker_tbl_df),
-            )
-
-            self.client.raw.rows.insert_dataframe(
-                db_name=self.config.raw_db_main,
-                table_name=self.config.raw_table_delete_tracker,
-                dataframe=generate_state_results,
-            )
-
-            delete_tracker_tbl_df = load_raw_tbl(
-                self.client,
-                self.config.raw_db_main,
-                self.config.raw_table_delete_tracker,
-            )
-        else:
-            logger.info("No Cognite_Delete == 1 rows; skipping delete-tracker insert and continuing with resurrection.")
-
         generate_nondeleted_state_results = generate_state(
             metadata_tbl_df,
             self.config.dwg_drop_folder_path,
@@ -242,7 +188,11 @@ class EdmsDeleteRunner:
             return
 
         nondeleted_pks = set(generate_nondeleted_state_results["primary_key"].astype(str))
-        delete_tracker_pks = set(delete_tracker_tbl_df["primary_key"].astype(str))
+        delete_tracker_pks = {
+            pk
+            for pk in delete_tracker_tbl_df["primary_key"].astype(str)
+            if pk not in {"DummyRowKey", "N/A"}
+        }
         resurrected_files_pk = list(nondeleted_pks & delete_tracker_pks)
 
         if not resurrected_files_pk:
@@ -273,6 +223,78 @@ class EdmsDeleteRunner:
             db_name=self.config.raw_db_main,
             table_name=self.config.raw_table_resurrect_tracker,
             dataframe=resurrected_df,
+        )
+
+    def _cleanup_empty_timestamp_rows(self, delete_tracker_tbl_df: pd.DataFrame) -> pd.DataFrame:
+        delete_empty_timestamp_records_list = [
+            key
+            for key in delete_tracker_tbl_df[
+                delete_tracker_tbl_df["DeletedInstanceTimestamp"].isna()
+                & delete_tracker_tbl_df["DeletedStateStoreRecordTimestamp"].isna()
+                & delete_tracker_tbl_df["DeletedTargetFolderPathTimestamp"].isna()
+                & delete_tracker_tbl_df["DeletedDwgDropFolderPathTimestamp"].isna()
+            ].index.astype(str).tolist()
+            if key != "DummyRowKey"
+        ]
+
+        if len(delete_empty_timestamp_records_list) == 0:
+            return delete_tracker_tbl_df
+
+        logger.info("Deleting records with empty timestamps:")
+        rows_before_delete_tracker_df = len(delete_tracker_tbl_df)
+        self.client.raw.rows.delete(
+            self.config.raw_db_main,
+            self.config.raw_table_delete_tracker,
+            delete_empty_timestamp_records_list,
+        )
+        delete_tracker_tbl_df = load_raw_tbl(
+            self.client, self.config.raw_db_main, self.config.raw_table_delete_tracker
+        )
+        rows_after_delete_tracker_df = len(delete_tracker_tbl_df)
+        if rows_after_delete_tracker_df < rows_before_delete_tracker_df:
+            logger.info(
+                "Deleted %s records with empty timestamps.",
+                rows_before_delete_tracker_df - rows_after_delete_tracker_df,
+            )
+        else:
+            logger.info("Failed to delete records with empty timestamps.")
+            logger.info("Proceeding with rest of workflow")
+        return delete_tracker_tbl_df
+
+    def _insert_preliminary_delete_state(
+        self,
+        metadata_tbl_df: pd.DataFrame,
+        statestore_tbl_df: pd.DataFrame,
+        cognite_file_tbl_df: pd.DataFrame,
+        delete_tracker_tbl_df: pd.DataFrame,
+        nowtime: str,
+        runid: str,
+    ) -> None:
+        generate_state_results = generate_state(
+            metadata_tbl_df,
+            self.config.dwg_drop_folder_path,
+            self.config.target_folder_path,
+            self.config.dm_instance_external_id_prefix,
+            cognite_file_tbl_df,
+            statestore_tbl_df,
+            nowtime,
+            runid,
+            True,
+        )
+        if generate_state_results is None:
+            logger.info("No Cognite_Delete == 1 rows; skipping delete-tracker insert.")
+            return
+
+        logger.info(
+            "Inserting preliminary state into %s.%s (%s rows in tracker before insert).",
+            self.config.raw_db_main,
+            self.config.raw_table_delete_tracker,
+            len(delete_tracker_tbl_df),
+        )
+        self.client.raw.rows.insert_dataframe(
+            db_name=self.config.raw_db_main,
+            table_name=self.config.raw_table_delete_tracker,
+            dataframe=generate_state_results,
         )
 
     def _apply_all_deletion_results(
