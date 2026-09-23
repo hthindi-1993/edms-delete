@@ -65,12 +65,16 @@ class EdmsDeleteRunner:
             True,
         )
 
-        delete_empty_timestamp_records_list = delete_tracker_tbl_df[
-            delete_tracker_tbl_df["DeletedInstanceTimestamp"].isna()
-            & delete_tracker_tbl_df["DeletedStateStoreRecordTimestamp"].isna()
-            & delete_tracker_tbl_df["DeletedTargetFolderPathTimestamp"].isna()
-            & delete_tracker_tbl_df["DeletedDwgDropFolderPathTimestamp"].isna()
-        ].index.tolist()
+        delete_empty_timestamp_records_list = [
+            key
+            for key in delete_tracker_tbl_df[
+                delete_tracker_tbl_df["DeletedInstanceTimestamp"].isna()
+                & delete_tracker_tbl_df["DeletedStateStoreRecordTimestamp"].isna()
+                & delete_tracker_tbl_df["DeletedTargetFolderPathTimestamp"].isna()
+                & delete_tracker_tbl_df["DeletedDwgDropFolderPathTimestamp"].isna()
+            ].index.astype(str).tolist()
+            if key != "DummyRowKey"
+        ]
 
         if len(delete_empty_timestamp_records_list) > 0:
             logger.info("Deleting records with empty timestamps:")
@@ -213,8 +217,6 @@ class EdmsDeleteRunner:
                 dataframe=generate_state_results,
             )
 
-            self._remove_dummy_row(self.config.raw_table_delete_tracker)
-
             delete_tracker_tbl_df = load_raw_tbl(
                 self.client,
                 self.config.raw_db_main,
@@ -271,25 +273,6 @@ class EdmsDeleteRunner:
             db_name=self.config.raw_db_main,
             table_name=self.config.raw_table_resurrect_tracker,
             dataframe=resurrected_df,
-        )
-
-    def _remove_dummy_row(
-        self,
-        table_name: str,
-        tracker_df: pd.DataFrame | None = None,
-    ) -> None:
-        if tracker_df is None:
-            tracker_df = load_raw_tbl(self.client, self.config.raw_db_main, table_name)
-
-        if not tracker_df.index.isin(["DummyRowKey"]).any():
-            logger.info("No dummy row in %s.", table_name)
-            return
-
-        logger.info("Removing dummy row from %s.", table_name)
-        self.client.raw.rows.delete(
-            db_name=self.config.raw_db_main,
-            table_name=table_name,
-            key="DummyRowKey",
         )
 
     def _apply_all_deletion_results(

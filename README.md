@@ -298,10 +298,7 @@ Used when files that were previously tracked for deletion are found again with `
 
 ### Dummy rows
 
-If a tracker table is missing or empty, a single `DummyRowKey` row is inserted so the table has a known schema.
-
-- **Delete tracker:** the dummy row is removed once real data is written.
-- **Resurrect tracker:** the dummy row is always kept. If it is missing from a non-empty table, it is re-inserted on load.
+If a tracker table is missing or empty, a single `DummyRowKey` row is inserted so the table has a known schema. Both the delete tracker and the resurrect tracker always keep that dummy row. If it is missing from a non-empty table, it is re-inserted on load. Empty-timestamp cleanup on the delete tracker also skips `DummyRowKey`.
 
 ---
 

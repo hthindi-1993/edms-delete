@@ -169,7 +169,7 @@ def get_delete_state_tracker_tbl(
 
     logger.info("Table '%s' already exists in database '%s'.", tbl_config, db_config)
 
-    if not cognite_delete_flag and not existing.index.astype(str).isin(["DummyRowKey"]).any():
+    if not existing.index.astype(str).isin(["DummyRowKey"]).any():
         logger.info("Dummy row missing from '%s'; re-inserting.", tbl_config)
         client.raw.rows.insert_dataframe(db_name=db_config, table_name=tbl_config, dataframe=dummy_df)
         return client.raw.rows.retrieve_dataframe(db_name=db_config, table_name=tbl_config, limit=None)
