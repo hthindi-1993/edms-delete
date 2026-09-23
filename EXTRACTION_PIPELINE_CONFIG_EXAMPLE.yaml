@@ -1,7 +1,8 @@
 rawTables:
-  rawDbMain: db_hasan
-  rawTableMetadataKeep: tbl_indp_edms_files_metadata_ken
+  rawDbMetadata: db_indp_edms_files_metadata_hasan_ref
+  rawDbDeletionExtractor: db_edms_files_delete_extractor_ref
   rawDbFileStateStore: db_edms_files_upload_ref
+  rawTableMetadata: tbl_indp_edms_files_metadata_ken
   rawTableFileStateStore: tbl_edms_files_ken_state
   rawTableDeleteTrackerTbl: tbl_edms_files_ken_delete_event
   rawTableResurrectTrackerTbl: tbl_edms_files_ken_resurrect_event
