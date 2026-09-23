@@ -106,24 +106,24 @@ def generate_state(
 
     metadata_tbl["runstart"] = nowtime
     metadata_tbl["RunId"] = runid
-    metadata_tbl["DoesInstanceExistBeforeStatus"] = metadata_tbl.apply(
-        lambda r: True if pd.notnull(r["space"]) else False,
-        axis=1,
-    )
-    metadata_tbl["DoesStateStoreRecordExistBeforeStatus"] = metadata_tbl.apply(
-        lambda r: True if pd.notnull(r["high"]) else False,
-        axis=1,
-    )
-    metadata_tbl["DoesTargetFolderPathExistBeforeStatus"] = metadata_tbl.apply(
-        lambda r: r["target_filepath_Exist"],
-        axis=1,
-    )
-    metadata_tbl["DoesDwgDropFolderPathExistBeforeStatus"] = metadata_tbl.apply(
-        lambda r: r["dwg_drop_path_Exist"] if pd.notnull(r["dwg_drop_path_Exist"]) else None,
-        axis=1,
-    )
 
     if cognite_delete_flag:
+        metadata_tbl["DoesInstanceExistBeforeStatus"] = metadata_tbl.apply(
+            lambda r: True if pd.notnull(r["space"]) else False,
+            axis=1,
+        )
+        metadata_tbl["DoesStateStoreRecordExistBeforeStatus"] = metadata_tbl.apply(
+            lambda r: True if pd.notnull(r["high"]) else False,
+            axis=1,
+        )
+        metadata_tbl["DoesTargetFolderPathExistBeforeStatus"] = metadata_tbl.apply(
+            lambda r: r["target_filepath_Exist"],
+            axis=1,
+        )
+        metadata_tbl["DoesDwgDropFolderPathExistBeforeStatus"] = metadata_tbl.apply(
+            lambda r: r["dwg_drop_path_Exist"] if pd.notnull(r["dwg_drop_path_Exist"]) else None,
+            axis=1,
+        )
         metadata_tbl["runend"] = None
         metadata_tbl["runFinished"] = False
         metadata_tbl["DoesInstanceExistAfterStatus"] = None
@@ -137,22 +137,6 @@ def generate_state(
     else:
         metadata_tbl["runend"] = get_current_time()
         metadata_tbl["runFinished"] = True
-        metadata_tbl["DoesInstanceExistAfterStatus"] = metadata_tbl.apply(
-            lambda r: True if pd.notnull(r["space"]) else False,
-            axis=1,
-        )
-        metadata_tbl["DoesStateStoreRecordExistAfterStatus"] = metadata_tbl.apply(
-            lambda r: True if pd.notnull(r["high"]) else False,
-            axis=1,
-        )
-        metadata_tbl["DoesTargetFolderPathExistAfterStatus"] = metadata_tbl.apply(
-            lambda r: r["target_filepath_Exist"],
-            axis=1,
-        )
-        metadata_tbl["DoesDwgDropFolderPathExistAfterStatus"] = metadata_tbl.apply(
-            lambda r: r["dwg_drop_path_Exist"] if pd.notnull(r["dwg_drop_path_Exist"]) else None,
-            axis=1,
-        )
         metadata_tbl["InstanceDetectedTimestamp"] = metadata_tbl.apply(
             lambda r: get_current_time() if pd.notnull(r["space"]) else None,
             axis=1,

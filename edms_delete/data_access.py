@@ -7,6 +7,17 @@ from cognite.client.data_classes.data_modeling import ViewId
 
 logger = logging.getLogger(__name__)
 
+EXISTENCE_STATUS_COLUMNS = (
+    "DoesInstanceExistBeforeStatus",
+    "DoesInstanceExistAfterStatus",
+    "DoesStateStoreRecordExistBeforeStatus",
+    "DoesStateStoreRecordExistAfterStatus",
+    "DoesDwgDropFolderPathExistBeforeStatus",
+    "DoesDwgDropFolderPathExistAfterStatus",
+    "DoesTargetFolderPathExistBeforeStatus",
+    "DoesTargetFolderPathExistAfterStatus",
+)
+
 
 def load_yaml_config(client: CogniteClient, pipeline_name: str) -> dict[str, Any]:
     import yaml
@@ -122,14 +133,6 @@ def get_delete_state_tracker_tbl(
         "dwg_drop_path_defined": "N/A",
         "target_filepath_defined": "N/A",
         "external_id": "N/A",
-        "DoesInstanceExistBeforeStatus": "N/A",
-        "DoesInstanceExistAfterStatus": "N/A",
-        "DoesStateStoreRecordExistBeforeStatus": "N/A",
-        "DoesStateStoreRecordExistAfterStatus": "N/A",
-        "DoesDwgDropFolderPathExistBeforeStatus": "N/A",
-        "DoesDwgDropFolderPathExistAfterStatus": "N/A",
-        "DoesTargetFolderPathExistBeforeStatus": "N/A",
-        "DoesTargetFolderPathExistAfterStatus": "N/A",
         "CurrentDeleteFlag": "N/A",
         "Cognite_Id": "N/A",
         "Cognite_Ingest": "N/A",
@@ -137,6 +140,14 @@ def get_delete_state_tracker_tbl(
     if cognite_delete_flag:
         custom_dummy_values.update(
             {
+                "DoesInstanceExistBeforeStatus": "N/A",
+                "DoesInstanceExistAfterStatus": "N/A",
+                "DoesStateStoreRecordExistBeforeStatus": "N/A",
+                "DoesStateStoreRecordExistAfterStatus": "N/A",
+                "DoesDwgDropFolderPathExistBeforeStatus": "N/A",
+                "DoesDwgDropFolderPathExistAfterStatus": "N/A",
+                "DoesTargetFolderPathExistBeforeStatus": "N/A",
+                "DoesTargetFolderPathExistAfterStatus": "N/A",
                 "DeletedInstanceTimestamp": "0101-01-01 00:00:00",
                 "DeletedStateStoreRecordTimestamp": "0101-01-01 00:00:00",
                 "DeletedDwgDropFolderPathTimestamp": "0101-01-01 00:00:00",
@@ -172,6 +183,24 @@ def get_delete_state_tracker_tbl(
     if not existing.index.astype(str).isin(["DummyRowKey"]).any():
         logger.info("Dummy row missing from '%s'; re-inserting.", tbl_config)
         client.raw.rows.insert_dataframe(db_name=db_config, table_name=tbl_config, dataframe=dummy_df)
-        return client.raw.rows.retrieve_dataframe(db_name=db_config, table_name=tbl_config, limit=None)
+        existing = client.raw.rows.retrieve_dataframe(db_name=db_config, table_name=tbl_config, limit=None)
+
+    if not cognite_delete_flag:
+        extra_columns = [column for column in EXISTENCE_STATUS_COLUMNS if column in existing.columns]
+        if extra_columns:
+            logger.info(
+                "Removing existence-status columns from resurrect tracker '%s': %s",
+                tbl_config,
+                extra_columns,
+            )
+            keys = existing.index.astype(str).tolist()
+            if keys:
+                client.raw.rows.delete(db_name=db_config, table_name=tbl_config, key=keys)
+            cleaned = existing.drop(columns=extra_columns, errors="ignore")
+            cleaned = cleaned.loc[~cleaned.index.astype(str).isin(["DummyRowKey"])]
+            client.raw.rows.insert_dataframe(db_name=db_config, table_name=tbl_config, dataframe=dummy_df)
+            if not cleaned.empty:
+                client.raw.rows.insert_dataframe(db_name=db_config, table_name=tbl_config, dataframe=cleaned)
+            return client.raw.rows.retrieve_dataframe(db_name=db_config, table_name=tbl_config, limit=None)
 
     return existing

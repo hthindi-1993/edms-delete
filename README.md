@@ -297,7 +297,7 @@ Preliminary insert sets after-status and delete-timestamp columns to `null` and 
 
 ### Resurrect tracker (`rawTableResurrectTrackerTbl`)
 
-Used when files that were previously tracked for deletion are found again with `Cognite_Delete ≠ 1`. Rows capture detection-oriented timestamps (`InstanceDetectedTimestamp`, `StateStoreRecordDetectedTimestamp`, etc.) rather than deletion timestamps. See below.
+Used when files that were previously tracked for deletion are found again with `Cognite_Delete ≠ 1`. Rows capture detection timestamps (`InstanceDetectedTimestamp`, `StateStoreRecordDetectedTimestamp`, `TargetFolderPathDetectedTimestamp`, `DwgDropFolderPathDetectedTimestamp`) rather than before/after existence flags or deletion timestamps. A timestamp is set only when that layer is present at detection time; otherwise it is `null`.
 
 ### Dummy rows
 
