@@ -86,8 +86,9 @@ Config is **not** read from a local YAML file at runtime. The CLI takes an extra
 
 | Key | Role |
 |-----|------|
-| `rawDbMain` | Database for metadata keep table and delete/resurrect trackers |
-| `rawTableMetadataKeep` | Source of truth for which files are flagged for delete (`Cognite_Delete`) |
+| `rawDbMetadata` | Database for the metadata table |
+| `rawTableMetadata` | Source of truth for which files are flagged for delete (`Cognite_Delete`) |
+| `rawDbDeletionExtractor` | Database for delete and resurrect tracker tables (created if missing) |
 | `rawDbFileStateStore` | Database for the file upload state store |
 | `rawTableFileStateStore` | State-store table (row key = instance external ID) |
 | `rawTableDeleteTrackerTbl` | Per-run delete audit / work queue |
@@ -156,11 +157,11 @@ EdmsDeleteRunner.run()
 
 | Source | How it is loaded |
 |--------|------------------|
-| Metadata keep table | RAW rows; for tables whose name contains `tbl_indp_edms_files_metadata`, only `File_Type_Short_Name`, `Cognite_Delete`, `primary_key`, and optional `Cognite_Id` are fetched |
+| Metadata keep table | RAW rows from `rawDbMetadata`.`rawTableMetadata`; for tables whose name contains `tbl_indp_edms_files_metadata`, only `File_Type_Short_Name`, `Cognite_Delete`, `primary_key`, and optional `Cognite_Id` are fetched |
 | File state store | Full RAW table |
 | DM file instances | All nodes in `instanceSpace` for the configured view (`external_id`, `space`) |
-| Delete tracker | Created with a dummy row if missing/empty |
-| Resurrect tracker | Created with a dummy row if missing/empty |
+| Delete tracker | In `rawDbDeletionExtractor`; database is created if missing; table is created with a dummy row if missing/empty |
+| Resurrect tracker | Same database; created with a dummy row if missing/empty |
 
 #### 3. Resurrection detection (only if metadata is non-empty)
 

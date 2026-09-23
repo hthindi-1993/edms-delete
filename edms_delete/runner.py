@@ -6,6 +6,7 @@ from cognite.client import CogniteClient
 
 from edms_delete.config import EdmsDeleteConfig
 from edms_delete.data_access import (
+    ensure_raw_database,
     get_delete_state_tracker_tbl,
     load_instances_files,
     load_raw_tbl,
@@ -42,8 +43,8 @@ class EdmsDeleteRunner:
 
         metadata_tbl_df = load_raw_tbl(
             self.client,
-            self.config.raw_db_main,
-            self.config.raw_table_metadata_keep,
+            self.config.raw_db_metadata,
+            self.config.raw_table_metadata,
         )
         statestore_tbl_df = load_raw_tbl(
             self.client,
@@ -58,15 +59,17 @@ class EdmsDeleteRunner:
             self.config.dm_version,
         )
 
+        ensure_raw_database(self.client, self.config.raw_db_deletion_extractor)
+
         delete_tracker_tbl_df = get_delete_state_tracker_tbl(
             self.client,
-            self.config.raw_db_main,
+            self.config.raw_db_deletion_extractor,
             self.config.raw_table_delete_tracker,
             True,
         )
         resurrect_tracker_tbl_df = get_delete_state_tracker_tbl(
             self.client,
-            self.config.raw_db_main,
+            self.config.raw_db_deletion_extractor,
             self.config.raw_table_resurrect_tracker,
             False,
         )
@@ -95,7 +98,7 @@ class EdmsDeleteRunner:
             )
             delete_tracker_tbl_df = load_raw_tbl(
                 self.client,
-                self.config.raw_db_main,
+                self.config.raw_db_deletion_extractor,
                 self.config.raw_table_delete_tracker,
             )
             delete_tracker_tbl_df = delete_tracker_tbl_df[delete_tracker_tbl_df["RunId"] == runid]
@@ -213,14 +216,14 @@ class EdmsDeleteRunner:
                 len(resurrected_df),
             )
             self.client.raw.rows.delete(
-                db_name=self.config.raw_db_main,
+                db_name=self.config.raw_db_deletion_extractor,
                 table_name=self.config.raw_table_resurrect_tracker,
                 key=existing_keys,
             )
 
         logger.info("Resurrected files count: %s", len(resurrected_df))
         self.client.raw.rows.insert_dataframe(
-            db_name=self.config.raw_db_main,
+            db_name=self.config.raw_db_deletion_extractor,
             table_name=self.config.raw_table_resurrect_tracker,
             dataframe=resurrected_df,
         )
@@ -243,12 +246,12 @@ class EdmsDeleteRunner:
         logger.info("Deleting records with empty timestamps:")
         rows_before_delete_tracker_df = len(delete_tracker_tbl_df)
         self.client.raw.rows.delete(
-            self.config.raw_db_main,
+            self.config.raw_db_deletion_extractor,
             self.config.raw_table_delete_tracker,
             delete_empty_timestamp_records_list,
         )
         delete_tracker_tbl_df = load_raw_tbl(
-            self.client, self.config.raw_db_main, self.config.raw_table_delete_tracker
+            self.client, self.config.raw_db_deletion_extractor, self.config.raw_table_delete_tracker
         )
         rows_after_delete_tracker_df = len(delete_tracker_tbl_df)
         if rows_after_delete_tracker_df < rows_before_delete_tracker_df:
@@ -287,12 +290,12 @@ class EdmsDeleteRunner:
 
         logger.info(
             "Inserting preliminary state into %s.%s (%s rows in tracker before insert).",
-            self.config.raw_db_main,
+            self.config.raw_db_deletion_extractor,
             self.config.raw_table_delete_tracker,
             len(delete_tracker_tbl_df),
         )
         self.client.raw.rows.insert_dataframe(
-            db_name=self.config.raw_db_main,
+            db_name=self.config.raw_db_deletion_extractor,
             table_name=self.config.raw_table_delete_tracker,
             dataframe=generate_state_results,
         )
@@ -386,7 +389,7 @@ class EdmsDeleteRunner:
         current_run_df = current_run_df.astype("object").where(current_run_df.notna(), None)
 
         self.client.raw.rows.insert_dataframe(
-            db_name=self.config.raw_db_main,
+            db_name=self.config.raw_db_deletion_extractor,
             table_name=self.config.raw_table_delete_tracker,
             dataframe=current_run_df,
         )

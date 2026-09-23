@@ -6,9 +6,10 @@ from edms_delete.utils.logging_setup import LoggerConfig
 
 @dataclass(frozen=True)
 class EdmsDeleteConfig:
-    raw_db_main: str
+    raw_db_metadata: str
+    raw_db_deletion_extractor: str
     raw_db_file_state_store: str
-    raw_table_metadata_keep: str
+    raw_table_metadata: str
     raw_table_delete_tracker: str
     raw_table_resurrect_tracker: str
     raw_table_file_state_store: str
@@ -29,9 +30,10 @@ class EdmsDeleteConfig:
         vm_properties = app_config["vmProperties"]
 
         return cls(
-            raw_db_main=raw_tables["rawDbMain"],
+            raw_db_metadata=raw_tables["rawDbMetadata"],
+            raw_db_deletion_extractor=raw_tables["rawDbDeletionExtractor"],
             raw_db_file_state_store=raw_tables["rawDbFileStateStore"],
-            raw_table_metadata_keep=raw_tables["rawTableMetadataKeep"],
+            raw_table_metadata=raw_tables["rawTableMetadata"],
             raw_table_delete_tracker=raw_tables["rawTableDeleteTrackerTbl"],
             raw_table_resurrect_tracker=raw_tables["rawTableResurrectTrackerTbl"],
             raw_table_file_state_store=raw_tables["rawTableFileStateStore"],

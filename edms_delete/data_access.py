@@ -4,6 +4,7 @@ from typing import Any
 import pandas as pd
 from cognite.client import CogniteClient
 from cognite.client.data_classes.data_modeling import ViewId
+from cognite.client.exceptions import CogniteAPIError
 
 logger = logging.getLogger(__name__)
 
@@ -17,6 +18,22 @@ EXISTENCE_STATUS_COLUMNS = (
     "DoesTargetFolderPathExistBeforeStatus",
     "DoesTargetFolderPathExistAfterStatus",
 )
+
+
+def ensure_raw_database(client: CogniteClient, db_name: str) -> None:
+    try:
+        logger.info("Attempting to create database %s", db_name)
+        created_df = client.raw.databases.create(name=db_name).to_pandas()
+        created_time = created_df.loc["created_time"].values[0]
+        if created_time:
+            created_str = (
+                created_time.strftime("%Y-%m-%d %H:%M:%S") + " UTC"
+                if hasattr(created_time, "strftime")
+                else str(created_time)
+            )
+            logger.info("Database %s was successfully created on %s", db_name, created_str)
+    except CogniteAPIError:
+        logger.info("Database %s already exists.", db_name)
 
 
 def load_yaml_config(client: CogniteClient, pipeline_name: str) -> dict[str, Any]:
