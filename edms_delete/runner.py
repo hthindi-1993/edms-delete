@@ -174,6 +174,11 @@ class EdmsDeleteRunner:
         nowtime: str,
         runid: str,
     ) -> None:
+        resurrect_tracker_tbl_df = self._remove_reflagged_resurrect_rows(
+            metadata_tbl_df,
+            resurrect_tracker_tbl_df,
+        )
+
         generate_nondeleted_state_results = generate_state(
             metadata_tbl_df,
             self.config.dwg_drop_folder_path,
@@ -226,6 +231,57 @@ class EdmsDeleteRunner:
             db_name=self.config.raw_db_deletion_extractor,
             table_name=self.config.raw_table_resurrect_tracker,
             dataframe=resurrected_df,
+        )
+
+    def _remove_reflagged_resurrect_rows(
+        self,
+        metadata_tbl_df: pd.DataFrame,
+        resurrect_tracker_tbl_df: pd.DataFrame,
+    ) -> pd.DataFrame:
+        if resurrect_tracker_tbl_df.empty or "Cognite_Delete" not in metadata_tbl_df.columns:
+            return resurrect_tracker_tbl_df
+
+        metadata_pks = metadata_tbl_df.copy()
+        if "primary_key" not in metadata_pks.columns:
+            metadata_pks = metadata_pks.reset_index().rename(columns={"index": "primary_key"})
+
+        flagged_pks = {
+            pk
+            for pk in metadata_pks.loc[metadata_pks["Cognite_Delete"] == 1, "primary_key"].astype(str)
+            if pk not in {"DummyRowKey", "N/A"}
+        }
+        if not flagged_pks:
+            logger.info("No Cognite_Delete == 1 rows; skipping resurrect-tracker reflag cleanup.")
+            return resurrect_tracker_tbl_df
+
+        if "primary_key" not in resurrect_tracker_tbl_df.columns:
+            logger.info("Resurrect tracker has no primary_key column; skipping reflag cleanup.")
+            return resurrect_tracker_tbl_df
+
+        keys_to_delete = [
+            key
+            for key in resurrect_tracker_tbl_df.index[
+                resurrect_tracker_tbl_df["primary_key"].astype(str).isin(flagged_pks)
+            ].astype(str).tolist()
+            if key != "DummyRowKey"
+        ]
+        if not keys_to_delete:
+            logger.info("No resurrect-tracker rows match Cognite_Delete == 1 primary_keys.")
+            return resurrect_tracker_tbl_df
+
+        logger.info(
+            "Removing %s resurrect-tracker row(s) whose primary_key is Cognite_Delete == 1.",
+            len(keys_to_delete),
+        )
+        self.client.raw.rows.delete(
+            db_name=self.config.raw_db_deletion_extractor,
+            table_name=self.config.raw_table_resurrect_tracker,
+            key=keys_to_delete,
+        )
+        return load_raw_tbl(
+            self.client,
+            self.config.raw_db_deletion_extractor,
+            self.config.raw_table_resurrect_tracker,
         )
 
     def _cleanup_empty_timestamp_rows(self, delete_tracker_tbl_df: pd.DataFrame) -> pd.DataFrame:

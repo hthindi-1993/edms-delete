@@ -31,3 +31,6 @@ Thumbs.db
 .DS_Store
 .idea/
 .vscode/
+
+#misc
+misc/
