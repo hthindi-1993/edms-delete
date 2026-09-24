@@ -147,7 +147,7 @@ def get_delete_state_tracker_tbl(
     tbl_config: str,
     cognite_delete_flag: bool,
 ) -> pd.DataFrame:
-    tbls_available = client.raw.tables.list(db_name=db_config).to_pandas()["name"].tolist()
+    tbls_available = [table.name for table in client.raw.tables.list(db_name=db_config, limit=None)]
 
     custom_dummy_values: dict[str, str] = {
         "primary_key": "DummyRowKey",
