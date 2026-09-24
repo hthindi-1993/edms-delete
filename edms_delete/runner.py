@@ -74,6 +74,8 @@ class EdmsDeleteRunner:
             False,
         )
 
+        delete_tracker_tbl_df = self._cleanup_empty_timestamp_rows(delete_tracker_tbl_df)
+
         if not metadata_tbl_df.empty:
             self._run_resurrection(
                 metadata_tbl_df=metadata_tbl_df,
@@ -84,8 +86,6 @@ class EdmsDeleteRunner:
                 nowtime=nowtime,
                 runid=runid,
             )
-
-        delete_tracker_tbl_df = self._cleanup_empty_timestamp_rows(delete_tracker_tbl_df)
 
         if not metadata_tbl_df.empty:
             self._insert_preliminary_delete_state(

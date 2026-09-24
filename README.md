@@ -37,8 +37,8 @@ Configuration is loaded from a Cognite extraction pipeline YAML (same pattern as
 Given a metadata RAW table that flags files with `Cognite_Delete == 1`, each run:
 
 1. Loads metadata, state-store, DM file instances, and existing trackers from CDF.
-2. Detects **resurrected** files (present in the delete tracker history but currently `Cognite_Delete ≠ 1`) and records them in the resurrect tracker. First it removes any resurrect-tracker rows whose `primary_key` is `Cognite_Delete == 1` again. This all runs **before** empty-timestamp cleanup so incomplete prior tracker rows still count as history.
-3. Cleans delete-tracker rows that have a null deletion timestamp for all sources (skips `DummyRowKey`). This is done to avoid the delete tracker from growing without bound.
+2. Cleans delete-tracker rows that have a null deletion timestamp for all sources (skips `DummyRowKey`). This is done to avoid the delete tracker from growing without bound.
+3. Detects **resurrected** files (present in remaining delete-tracker history but currently `Cognite_Delete ≠ 1`) and records them in the resurrect tracker. First it removes any resurrect-tracker rows whose `primary_key` is `Cognite_Delete == 1` again.
 4. Builds a **preliminary delete state** for flagged rows and inserts it into the delete tracker.
    Preliminary delete state is an insert of rows at the beginning of the run where `Cognite_Delete = 1` in the metadata table.
 5. Deletes, for the current run only, resources that existed **before** this run:
@@ -164,13 +164,7 @@ EdmsDeleteRunner.run()
 | Delete tracker | In `rawDbDeletionExtractor`; database is created if missing; table is created with a dummy row if missing/empty |
 | Resurrect tracker | Same database; created with a dummy row if missing/empty |
 
-#### 3. Resurrection detection (only if metadata is non-empty)
-
-See [Resurrection detection](#resurrection-detection) and [Identifier and path derivation](#identifier-and-path-derivation).
-
-Resurrection is evaluated against the delete tracker **as loaded**, before empty-timestamp cleanup.
-
-#### 4. Clean incomplete delete-tracker rows
+#### 3. Clean incomplete delete-tracker rows
 
 Any delete-tracker row where **all four** of these are null is deleted from RAW (`DummyRowKey` is skipped):
 
@@ -180,6 +174,12 @@ Any delete-tracker row where **all four** of these are null is deleted from RAW 
 - `DeletedDwgDropFolderPathTimestamp`
 
 These are treated as abandoned / never-completed work items. If cleanup fails, the run continues.
+
+#### 4. Resurrection detection (only if metadata is non-empty)
+
+See [Resurrection detection](#resurrection-detection) and [Identifier and path derivation](#identifier-and-path-derivation).
+
+Resurrection is evaluated against the delete tracker **after** empty-timestamp cleanup, so only completed (or dummy) history counts.
 
 #### 5. Preliminary delete state (only if metadata is non-empty)
 
@@ -309,14 +309,14 @@ If a tracker table is missing or empty, a single `DummyRowKey` row is inserted s
 
 ## Resurrection detection
 
-Resurrection is evaluated on every run that has metadata, **including runs with zero `Cognite_Delete == 1` rows** (delete-tracker insert is skipped in that case; resurrection still runs). It uses the delete tracker **before** empty-timestamp cleanup, so prior rows with all delete timestamps null still count as history.
+Resurrection is evaluated on every run that has metadata, **including runs with zero `Cognite_Delete == 1` rows** (delete-tracker insert is skipped in that case; resurrection still runs). It uses the delete tracker **after** empty-timestamp cleanup, so unfinished prior rows (all delete timestamps null) do not count as history.
 
 1. Collects metadata `primary_key` values where `Cognite_Delete == 1`. If any of those keys are already in the resurrect tracker, those resurrect-tracker rows are deleted (`DummyRowKey` is skipped). This runs **before** any new resurrect rows are written, so a file that was resurrected and is now flagged for delete again is removed from the resurrect snapshot.
 2. Builds a state snapshot for metadata where `Cognite_Delete ≠ 1`.
 3. Computes the intersection of `primary_key` values between that snapshot and the loaded delete tracker (string-normalized; `DummyRowKey` / `N/A` excluded).
 4. If the intersection is empty → logs “No files were resurrected” and leaves the remaining resurrect tracker unchanged.
 5. If non-empty → **deletes all remaining resurrect-tracker rows except `DummyRowKey`**, then inserts the intersecting (resurrected) rows.
-6. After resurrection, empty-timestamp delete-tracker rows are cleaned, then this run’s `Cognite_Delete == 1` snapshot is inserted.
+6. After resurrection, this run’s `Cognite_Delete == 1` snapshot is inserted into the delete tracker.
 
 Clearing the table first keeps it as a snapshot of the current resurrected set instead of appending a new `{RunId}|{primary_key}` row every run or leaving stale rows for files that are no longer resurrected. `DummyRowKey` stays so the table never loses its schema row.
 
