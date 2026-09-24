@@ -21,19 +21,30 @@ EXISTENCE_STATUS_COLUMNS = (
 
 
 def ensure_raw_database(client: CogniteClient, db_name: str) -> None:
-    try:
-        logger.info("Attempting to create database %s", db_name)
-        created_df = client.raw.databases.create(name=db_name).to_pandas()
-        created_time = created_df.loc["created_time"].values[0]
-        if created_time:
-            created_str = (
-                created_time.strftime("%Y-%m-%d %H:%M:%S") + " UTC"
-                if hasattr(created_time, "strftime")
-                else str(created_time)
-            )
-            logger.info("Database %s was successfully created on %s", db_name, created_str)
-    except CogniteAPIError:
+    existing_names = {database.name for database in client.raw.databases.list(limit=None)}
+    if db_name in existing_names:
         logger.info("Database %s already exists.", db_name)
+        return
+
+    logger.info("Attempting to create database %s", db_name)
+    try:
+        created = client.raw.databases.create(db_name)
+    except CogniteAPIError as exc:
+        if exc.code == 409:
+            logger.info("Database %s already exists.", db_name)
+            return
+        logger.error("Failed to create database %s: %s", db_name, exc)
+        raise
+
+    created_time = getattr(created, "created_time", None)
+    if created_time and hasattr(created_time, "strftime"):
+        logger.info(
+            "Database %s was successfully created on %s UTC",
+            db_name,
+            created_time.strftime("%Y-%m-%d %H:%M:%S"),
+        )
+    else:
+        logger.info("Database %s was successfully created.", db_name)
 
 
 def load_yaml_config(client: CogniteClient, pipeline_name: str) -> dict[str, Any]:
