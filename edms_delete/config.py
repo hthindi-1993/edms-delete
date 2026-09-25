@@ -11,6 +11,7 @@ class EdmsDeleteConfig:
     raw_db_file_state_store: str
     raw_table_metadata: str
     raw_table_delete_tracker: str
+    raw_table_deletion_extractor_summary: str
     raw_table_file_state_store: str
     dm_schema_space: str
     dm_external_id: str
@@ -34,6 +35,7 @@ class EdmsDeleteConfig:
             raw_db_file_state_store=raw_tables["rawDbFileStateStore"],
             raw_table_metadata=raw_tables["rawTableMetadata"],
             raw_table_delete_tracker=raw_tables["rawTableDeleteTrackerTbl"],
+            raw_table_deletion_extractor_summary=raw_tables["rawDbDeletionExtractorSummary"],
             raw_table_file_state_store=raw_tables["rawTableFileStateStore"],
             dm_schema_space=data_model_views["schemaSpace"],
             dm_external_id=data_model_views["dmExternalId"],

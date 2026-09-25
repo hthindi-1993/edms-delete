@@ -6,7 +6,7 @@ Orchestrates deletion of EDMS files across three layers:
 2. **CDF RAW file state-store rows** (upload / extractor state)
 3. **Files on the VM** (target folder and DWG/DGN drop folder)
 
-It also records every run in a RAW **delete** tracker table so operators can audit what was removed and what failed.
+It also records every run in a RAW **delete** tracker table so operators can audit what was removed and what failed, plus a **run summary** table with one row per run (`RunId`, `runstart`, `runend`, `runFinished`).
 
 Configuration is loaded from a Cognite extraction pipeline YAML (same pattern as `csv-extractor`).
 
@@ -34,8 +34,8 @@ Configuration is loaded from a Cognite extraction pipeline YAML (same pattern as
 
 Given a metadata RAW table that flags files with `Cognite_Delete == 1`, each run:
 
-1. Loads metadata, state-store, DM file instances, and the existing delete tracker from CDF.
-2. Cleans delete-tracker rows that have a null deletion timestamp for all sources (skips `DummyRowKey`). This is done to avoid the delete tracker from growing without bound.
+1. Loads metadata, state-store, DM file instances, and the existing delete tracker and run-summary tables from CDF.
+2. Inserts a **preliminary run-summary** row (`RunId`, `runstart`; `runend` null, `runFinished` false).
 3. Builds a **preliminary delete state** for flagged rows and inserts it into the delete tracker.
    Preliminary delete state is an insert of rows at the beginning of the run where `Cognite_Delete = 1` in the metadata table.
 4. Deletes, for the current run only, resources that existed **before** this run:
@@ -43,7 +43,8 @@ Given a metadata RAW table that flags files with `Cognite_Delete == 1`, each run
    - state-store RAW rows
    - files under the DWG drop folder (DGN/DWG only)
    - files under the target folder
-5. Writes after-status and deletion timestamps back to the delete tracker and marks the run finished.
+5. Writes after-status and deletion timestamps back to the delete tracker, marks the run finished, and upserts `runend` / `runFinished` on the summary row.
+6. Reloads the delete tracker and removes this run’s rows where all four deletion timestamps are still null (nothing was deleted for that file). `DummyRowKey` is skipped.
 
 Nothing is deleted unless the corresponding **before-status** flag is `True` for that resource on a current-run tracker row with `CurrentDeleteFlag == True`.
 
@@ -86,10 +87,11 @@ Config is **not** read from a local YAML file at runtime. The CLI takes an extra
 |-----|------|
 | `rawDbMetadata` | Database for the metadata table |
 | `rawTableMetadata` | Source of truth for which files are flagged for delete (`Cognite_Delete`) |
-| `rawDbDeletionExtractor` | Database for the delete tracker table (created if missing) |
+| `rawDbDeletionExtractor` | Database for the delete tracker and run-summary tables (created if missing) |
 | `rawDbFileStateStore` | Database for the file upload state store |
 | `rawTableFileStateStore` | State-store table (row key = instance external ID) |
 | `rawTableDeleteTrackerTbl` | Per-run delete audit / work queue |
+| `rawDbDeletionExtractorSummary` | One row per run with `RunId`, `runstart`, `runend`, `runFinished` |
 
 #### `dataModelViews`
 
@@ -158,17 +160,11 @@ EdmsDeleteRunner.run()
 | File state store | Full RAW table |
 | DM file instances | All nodes in `instanceSpace` for the configured view (`external_id`, `space`) |
 | Delete tracker | In `rawDbDeletionExtractor`; database is created if missing; table is created with a dummy row if missing/empty |
+| Run summary | Same database; table from `rawDbDeletionExtractorSummary`; created with a dummy row if missing/empty |
 
-#### 3. Clean incomplete delete-tracker rows
+#### 3. Preliminary run summary
 
-Any delete-tracker row where **all four** of these are null is deleted from RAW (`DummyRowKey` is skipped):
-
-- `DeletedInstanceTimestamp`
-- `DeletedStateStoreRecordTimestamp`
-- `DeletedTargetFolderPathTimestamp`
-- `DeletedDwgDropFolderPathTimestamp`
-
-These are treated as abandoned / never-completed work items. If cleanup fails, the run continues.
+Inserts one summary row keyed by `RunId` with `runstart` populated, `runend` null, and `runFinished` false. That row is later upserted at finalize.
 
 #### 4. Preliminary delete state (only if metadata is non-empty)
 
@@ -206,6 +202,19 @@ For all current-run rows:
 - `runFinished` = `True`
 
 Those rows are written back to the delete tracker via `insert_dataframe` (upsert by row key).
+
+The run-summary row for this `RunId` is upserted with the same `runstart` plus `runend` and `runFinished = True`. `DummyRowKey` is kept on that table.
+
+#### 9. Remove this run’s empty-timestamp rows
+
+The delete tracker is reloaded. Any row for the current `RunId` where **all four** of these are null is deleted (`DummyRowKey` is skipped):
+
+- `DeletedInstanceTimestamp`
+- `DeletedStateStoreRecordTimestamp`
+- `DeletedTargetFolderPathTimestamp`
+- `DeletedDwgDropFolderPathTimestamp`
+
+Those are files that were queued this run but had nothing actually deleted. Rows with at least one deletion timestamp stay as audit history.
 
 ---
 
@@ -286,9 +295,22 @@ Row key: `{RunId}|{primary_key}`.
 
 Preliminary insert sets after-status and delete-timestamp columns to `null` and `runFinished` to `False`. Finalize sets `runend` / `runFinished` and upserts the current-run rows.
 
+### Run summary (`rawDbDeletionExtractorSummary`)
+
+Row key: `{RunId}`. One row per script run.
+
+| Column | Meaning |
+|--------|---------|
+| `RunId` | Generated at the start of the run (same ID as the delete tracker) |
+| `runstart` | Written on the preliminary insert |
+| `runend` | `null` until finalize; then the run end timestamp |
+| `runFinished` | `false` on the preliminary insert; `true` after finalize |
+
+A crashed or killed run can leave a summary row with `runFinished` still `false` and `runend` null. This row is written even when every current-run delete-tracker row is later removed for empty timestamps.
+
 ### Dummy rows
 
-If the delete tracker is missing or empty, a single `DummyRowKey` row is inserted so the table has a known schema. That dummy row is always kept. If it is missing from a non-empty table, it is re-inserted on load. Empty-timestamp cleanup also skips `DummyRowKey`.
+If the delete tracker or run-summary table is missing or empty, a single `DummyRowKey` row is inserted so the table has a known schema. That dummy row is always kept on both tables. If it is missing from a non-empty table, it is re-inserted on load. End-of-run empty-timestamp cleanup on the delete tracker also skips `DummyRowKey`.
 
 ---
 
@@ -359,7 +381,7 @@ Layout mirrors `csv-extractor` (pipeline-driven config, shared CDF client helper
 
 ## Operational notes
 
-- **Idempotency:** Re-running after a successful run creates a new `RunId`. Rows already deleted will typically show before-status `False` and will not be re-queued. Incomplete rows (all delete timestamps null) are purged at the start of the next run.
+- **Idempotency:** Re-running after a successful run creates a new `RunId`. Rows already deleted will typically show before-status `False` and will not be re-queued. Current-run rows where nothing was deleted (all delete timestamps null) are removed at the end of that same run.
 - **Partial success:** Each of the four delete channels is verified independently. A row can have some `Deleted*Timestamp` values set and others still null.
 - **DWG/DGN only for drop folder:** Non-CAD types never get a `dwg_drop_path_defined`; drop-folder before/after status stays N/A/`null`.
 - **Permissions:** The service principal needs rights to read/write the configured RAW DBs/tables, list/delete DM instances in the instance space, and read the extraction pipeline config. The OS user running the process needs delete rights on the VM folders.

@@ -130,14 +130,43 @@ def load_instances_files(
     return instances.set_index("key")
 
 
+def ensure_raw_table_with_dummy_row(
+    client: CogniteClient,
+    db_name: str,
+    table_name: str,
+    dummy_values: dict[str, str],
+) -> pd.DataFrame:
+    tbls_available = [table.name for table in client.raw.tables.list(db_name=db_name, limit=None)]
+    dummy_df = pd.DataFrame([dummy_values]).set_index("key")
+
+    if table_name not in tbls_available:
+        client.raw.tables.create(db_name=db_name, name=table_name)
+        logger.info("Table '%s' created in database '%s'.", table_name, db_name)
+        client.raw.rows.insert_dataframe(db_name=db_name, table_name=table_name, dataframe=dummy_df)
+        return client.raw.rows.retrieve_dataframe(db_name=db_name, table_name=table_name, limit=None)
+
+    existing = client.raw.rows.retrieve_dataframe(db_name=db_name, table_name=table_name, limit=None)
+    if len(existing) == 0:
+        logger.info("Table '%s' exists but is empty in database '%s'. Inserting dummy row.", table_name, db_name)
+        client.raw.rows.insert_dataframe(db_name=db_name, table_name=table_name, dataframe=dummy_df)
+        return client.raw.rows.retrieve_dataframe(db_name=db_name, table_name=table_name, limit=None)
+
+    logger.info("Table '%s' already exists in database '%s'.", table_name, db_name)
+
+    if not existing.index.astype(str).isin(["DummyRowKey"]).any():
+        logger.info("Dummy row missing from '%s'; re-inserting.", table_name)
+        client.raw.rows.insert_dataframe(db_name=db_name, table_name=table_name, dataframe=dummy_df)
+        existing = client.raw.rows.retrieve_dataframe(db_name=db_name, table_name=table_name, limit=None)
+
+    return existing
+
+
 def get_delete_state_tracker_tbl(
     client: CogniteClient,
     db_config: str,
     tbl_config: str,
 ) -> pd.DataFrame:
-    tbls_available = [table.name for table in client.raw.tables.list(db_name=db_config, limit=None)]
-
-    custom_dummy_values: dict[str, str] = {
+    dummy_values: dict[str, str] = {
         "primary_key": "DummyRowKey",
         "runstart": "0101-01-01 00:00:00",
         "runend": "0101-01-01 00:00:00",
@@ -165,26 +194,19 @@ def get_delete_state_tracker_tbl(
         "DeletedDwgDropFolderPathTimestamp": "0101-01-01 00:00:00",
         "DeletedTargetFolderPathTimestamp": "0101-01-01 00:00:00",
     }
+    return ensure_raw_table_with_dummy_row(client, db_config, tbl_config, dummy_values)
 
-    dummy_df = pd.DataFrame([custom_dummy_values]).set_index("key")
 
-    if tbl_config not in tbls_available:
-        client.raw.tables.create(db_name=db_config, name=tbl_config)
-        logger.info("Table '%s' created in database '%s'.", tbl_config, db_config)
-        client.raw.rows.insert_dataframe(db_name=db_config, table_name=tbl_config, dataframe=dummy_df)
-        return client.raw.rows.retrieve_dataframe(db_name=db_config, table_name=tbl_config, limit=None)
-
-    existing = client.raw.rows.retrieve_dataframe(db_name=db_config, table_name=tbl_config, limit=None)
-    if len(existing) == 0:
-        logger.info("Table '%s' exists but is empty in database '%s'. Inserting dummy row.", tbl_config, db_config)
-        client.raw.rows.insert_dataframe(db_name=db_config, table_name=tbl_config, dataframe=dummy_df)
-        return client.raw.rows.retrieve_dataframe(db_name=db_config, table_name=tbl_config, limit=None)
-
-    logger.info("Table '%s' already exists in database '%s'.", tbl_config, db_config)
-
-    if not existing.index.astype(str).isin(["DummyRowKey"]).any():
-        logger.info("Dummy row missing from '%s'; re-inserting.", tbl_config)
-        client.raw.rows.insert_dataframe(db_name=db_config, table_name=tbl_config, dataframe=dummy_df)
-        existing = client.raw.rows.retrieve_dataframe(db_name=db_config, table_name=tbl_config, limit=None)
-
-    return existing
+def get_run_summary_tbl(
+    client: CogniteClient,
+    db_config: str,
+    tbl_config: str,
+) -> pd.DataFrame:
+    dummy_values: dict[str, str] = {
+        "key": "DummyRowKey",
+        "RunId": "N/A",
+        "runstart": "0101-01-01 00:00:00",
+        "runend": "0101-01-01 00:00:00",
+        "runFinished": "N/A",
+    }
+    return ensure_raw_table_with_dummy_row(client, db_config, tbl_config, dummy_values)
