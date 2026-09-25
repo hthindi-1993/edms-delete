@@ -6,7 +6,7 @@ Orchestrates deletion of EDMS files across three layers:
 2. **CDF RAW file state-store rows** (upload / extractor state)
 3. **Files on the VM** (target folder and DWG/DGN drop folder)
 
-It also records every run in RAW **delete** and **resurrect** tracker tables so operators can audit what was removed, what failed, and when a previously deleted file reappears with `Cognite_Delete ≠ 1`.
+It also records every run in a RAW **delete** tracker table so operators can audit what was removed and what failed.
 
 Configuration is loaded from a Cognite extraction pipeline YAML (same pattern as `csv-extractor`).
 
@@ -22,12 +22,10 @@ Configuration is loaded from a Cognite extraction pipeline YAML (same pattern as
 - [Deletion eligibility](#deletion-eligibility)
 - [Deletion operations](#deletion-operations)
 - [Tracker columns and semantics](#tracker-columns-and-semantics)
-- [Resurrection detection](#resurrection-detection)
 - [Logging](#logging)
 - [Run locally](#run-locally)
 - [Build executable](#build-executable)
 - [Package layout](#package-layout)
-- [Code schematic](SCHEMATIC.md)
 - [Operational notes](#operational-notes)
 
 ---
@@ -36,17 +34,16 @@ Configuration is loaded from a Cognite extraction pipeline YAML (same pattern as
 
 Given a metadata RAW table that flags files with `Cognite_Delete == 1`, each run:
 
-1. Loads metadata, state-store, DM file instances, and existing trackers from CDF.
+1. Loads metadata, state-store, DM file instances, and the existing delete tracker from CDF.
 2. Cleans delete-tracker rows that have a null deletion timestamp for all sources (skips `DummyRowKey`). This is done to avoid the delete tracker from growing without bound.
-3. Detects **resurrected** files (present in remaining delete-tracker history but currently `Cognite_Delete ≠ 1`) and records them in the resurrect tracker. First it removes any resurrect-tracker rows whose `primary_key` is `Cognite_Delete == 1` again.
-4. Builds a **preliminary delete state** for flagged rows and inserts it into the delete tracker.
+3. Builds a **preliminary delete state** for flagged rows and inserts it into the delete tracker.
    Preliminary delete state is an insert of rows at the beginning of the run where `Cognite_Delete = 1` in the metadata table.
-5. Deletes, for the current run only, resources that existed **before** this run:
+4. Deletes, for the current run only, resources that existed **before** this run:
    - DM file instances
    - state-store RAW rows
    - files under the DWG drop folder (DGN/DWG only)
    - files under the target folder
-6. Writes after-status and deletion timestamps back to the delete tracker and marks the run finished.
+5. Writes after-status and deletion timestamps back to the delete tracker and marks the run finished.
 
 Nothing is deleted unless the corresponding **before-status** flag is `True` for that resource on a current-run tracker row with `CurrentDeleteFlag == True`.
 
@@ -89,11 +86,10 @@ Config is **not** read from a local YAML file at runtime. The CLI takes an extra
 |-----|------|
 | `rawDbMetadata` | Database for the metadata table |
 | `rawTableMetadata` | Source of truth for which files are flagged for delete (`Cognite_Delete`) |
-| `rawDbDeletionExtractor` | Database for delete and resurrect tracker tables (created if missing) |
+| `rawDbDeletionExtractor` | Database for the delete tracker table (created if missing) |
 | `rawDbFileStateStore` | Database for the file upload state store |
 | `rawTableFileStateStore` | State-store table (row key = instance external ID) |
 | `rawTableDeleteTrackerTbl` | Per-run delete audit / work queue |
-| `rawTableResurrectTrackerTbl` | Audit of files that reappear after a prior delete |
 
 #### `dataModelViews`
 
@@ -162,7 +158,6 @@ EdmsDeleteRunner.run()
 | File state store | Full RAW table |
 | DM file instances | All nodes in `instanceSpace` for the configured view (`external_id`, `space`) |
 | Delete tracker | In `rawDbDeletionExtractor`; database is created if missing; table is created with a dummy row if missing/empty |
-| Resurrect tracker | Same database; created with a dummy row if missing/empty |
 
 #### 3. Clean incomplete delete-tracker rows
 
@@ -175,19 +170,13 @@ Any delete-tracker row where **all four** of these are null is deleted from RAW 
 
 These are treated as abandoned / never-completed work items. If cleanup fails, the run continues.
 
-#### 4. Resurrection detection (only if metadata is non-empty)
-
-See [Resurrection detection](#resurrection-detection) and [Identifier and path derivation](#identifier-and-path-derivation).
-
-Resurrection is evaluated against the delete tracker **after** empty-timestamp cleanup, so only completed (or dummy) history counts.
-
-#### 5. Preliminary delete state (only if metadata is non-empty)
+#### 4. Preliminary delete state (only if metadata is non-empty)
 
 Inserts a delete-state snapshot for `Cognite_Delete == 1` rows (skipped when none exist). The delete tracker is then reloaded and **filtered to the current `RunId`** for the deletion phase.
 
-If metadata is empty, resurrection and state generation are skipped; deletion still runs against whatever current-`RunId` rows already exist in the in-memory tracker snapshot (typically none for a fresh run).
+If metadata is empty, state generation is skipped; deletion still runs against whatever current-`RunId` rows already exist in the in-memory tracker snapshot (typically none for a fresh run).
 
-#### 6. Build delete lists
+#### 5. Build delete lists
 
 For the current run, four lists are built (see [Deletion eligibility](#deletion-eligibility)):
 
@@ -198,18 +187,18 @@ For the current run, four lists are built (see [Deletion eligibility](#deletion-
 | DWG drop files | `DoesDwgDropFolderPathExistBeforeStatus` | `dwg_drop_path_defined` |
 | Target files | `DoesTargetFolderPathExistBeforeStatus` | `target_filepath_defined` |
 
-#### 7. Perform deletions
+#### 6. Perform deletions
 
 Each list is passed to the matching operation (see [Deletion operations](#deletion-operations)). Operations are independent: a failure or empty list in one does not skip the others.
 
-#### 8. Apply results to the tracker
+#### 7. Apply results to the tracker
 
 For each resource type, current-run rows are updated with:
 
 - `Does*ExistAfterStatus` — whether the identifier still exists after the operation
 - `Deleted*Timestamp` — set only when the identifier appears in that operation’s `deleted_actual` set
 
-#### 9. Finalize
+#### 8. Finalize
 
 For all current-run rows:
 
@@ -297,30 +286,9 @@ Row key: `{RunId}|{primary_key}`.
 
 Preliminary insert sets after-status and delete-timestamp columns to `null` and `runFinished` to `False`. Finalize sets `runend` / `runFinished` and upserts the current-run rows.
 
-### Resurrect tracker (`rawTableResurrectTrackerTbl`)
-
-Used when files that were previously tracked for deletion are found again with `Cognite_Delete ≠ 1`. Rows capture detection timestamps (`InstanceDetectedTimestamp`, `StateStoreRecordDetectedTimestamp`, `TargetFolderPathDetectedTimestamp`, `DwgDropFolderPathDetectedTimestamp`) rather than before/after existence flags or deletion timestamps. A timestamp is set only when that layer is present at detection time; otherwise it is `null`.
-
 ### Dummy rows
 
-If a tracker table is missing or empty, a single `DummyRowKey` row is inserted so the table has a known schema. Both the delete tracker and the resurrect tracker always keep that dummy row. If it is missing from a non-empty table, it is re-inserted on load. Empty-timestamp cleanup on the delete tracker also skips `DummyRowKey`.
-
----
-
-## Resurrection detection
-
-Resurrection is evaluated on every run that has metadata, **including runs with zero `Cognite_Delete == 1` rows** (delete-tracker insert is skipped in that case; resurrection still runs). It uses the delete tracker **after** empty-timestamp cleanup, so unfinished prior rows (all delete timestamps null) do not count as history.
-
-1. Collects metadata `primary_key` values where `Cognite_Delete == 1`. If any of those keys are already in the resurrect tracker, those resurrect-tracker rows are deleted (`DummyRowKey` is skipped). This runs **before** any new resurrect rows are written, so a file that was resurrected and is now flagged for delete again is removed from the resurrect snapshot.
-2. Builds a state snapshot for metadata where `Cognite_Delete ≠ 1`.
-3. Computes the intersection of `primary_key` values between that snapshot and the loaded delete tracker (string-normalized; `DummyRowKey` / `N/A` excluded).
-4. If the intersection is empty → logs “No files were resurrected” and leaves the remaining resurrect tracker unchanged.
-5. If non-empty → **deletes all remaining resurrect-tracker rows except `DummyRowKey`**, then inserts the intersecting (resurrected) rows.
-6. After resurrection, this run’s `Cognite_Delete == 1` snapshot is inserted into the delete tracker.
-
-Clearing the table first keeps it as a snapshot of the current resurrected set instead of appending a new `{RunId}|{primary_key}` row every run or leaving stale rows for files that are no longer resurrected. `DummyRowKey` stays so the table never loses its schema row.
-
-Interpretation: a `primary_key` that already appears in delete-tracker history and is again present in metadata **without** the delete flag is treated as a resurrection signal for auditing. Resurrection recording does not undelete anything; it only writes audit rows.
+If the delete tracker is missing or empty, a single `DummyRowKey` row is inserted so the table has a known schema. That dummy row is always kept. If it is missing from a non-empty table, it is re-inserted on load. Empty-timestamp cleanup also skips `DummyRowKey`.
 
 ---
 
@@ -376,7 +344,7 @@ Run the exe the same way as the module (pass `.env` path and pipeline external I
 | `edms_delete/__main__.py` | CLI: auth, load pipeline config, invoke runner |
 | `edms_delete/config.py` | `EdmsDeleteConfig` from pipeline YAML |
 | `edms_delete/runner.py` | End-to-end orchestration |
-| `edms_delete/state.py` | Build delete / non-delete state dataframes |
+| `edms_delete/state.py` | Build delete-state dataframes |
 | `edms_delete/tracker.py` | Delete-list selection and result application |
 | `edms_delete/delete_operations.py` | CDF instance, RAW, and VM file deletes |
 | `edms_delete/data_access.py` | RAW / instance loads and tracker bootstrap |

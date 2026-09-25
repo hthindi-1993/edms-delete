@@ -5,7 +5,6 @@ from typing import Optional
 import pandas as pd
 
 from edms_delete.paths import get_files_in_directory, get_source_id
-from edms_delete.utils.time_utils import get_current_time
 
 logger = logging.getLogger(__name__)
 
@@ -19,21 +18,14 @@ def generate_state(
     statestore_tbl: pd.DataFrame,
     nowtime: str,
     runid: str,
-    cognite_delete_flag: bool,
 ) -> Optional[pd.DataFrame]:
     metadata_tbl = rawtblmetadatadf.copy()
 
-    if cognite_delete_flag:
-        metadata_tbl = metadata_tbl[metadata_tbl["Cognite_Delete"] == 1]
-        logger.info("Filtering metadata for Cognite_Delete == 1 rows.")
-        if metadata_tbl.empty:
-            logger.info("No metadata available after filtering for Cognite_Delete == 1 rows.")
-            return None
-    else:
-        metadata_tbl = metadata_tbl[metadata_tbl["Cognite_Delete"] != 1]
-        if metadata_tbl.empty:
-            logger.info("No metadata available after filtering for Cognite_Delete <> 1 rows.")
-            return None
+    metadata_tbl = metadata_tbl[metadata_tbl["Cognite_Delete"] == 1]
+    logger.info("Filtering metadata for Cognite_Delete == 1 rows.")
+    if metadata_tbl.empty:
+        logger.info("No metadata available after filtering for Cognite_Delete == 1 rows.")
+        return None
 
     required_columns = ["File_Type_Short_Name", "Cognite_Delete", "Cognite_Ingest", "primary_key"]
     has_cognite_id = "Cognite_Id" in metadata_tbl.columns
@@ -107,52 +99,32 @@ def generate_state(
     metadata_tbl["runstart"] = nowtime
     metadata_tbl["RunId"] = runid
 
-    if cognite_delete_flag:
-        metadata_tbl["DoesInstanceExistBeforeStatus"] = metadata_tbl.apply(
-            lambda r: True if pd.notnull(r["space"]) else False,
-            axis=1,
-        )
-        metadata_tbl["DoesStateStoreRecordExistBeforeStatus"] = metadata_tbl.apply(
-            lambda r: True if pd.notnull(r["high"]) else False,
-            axis=1,
-        )
-        metadata_tbl["DoesTargetFolderPathExistBeforeStatus"] = metadata_tbl.apply(
-            lambda r: r["target_filepath_Exist"],
-            axis=1,
-        )
-        metadata_tbl["DoesDwgDropFolderPathExistBeforeStatus"] = metadata_tbl.apply(
-            lambda r: r["dwg_drop_path_Exist"] if pd.notnull(r["dwg_drop_path_Exist"]) else None,
-            axis=1,
-        )
-        metadata_tbl["runend"] = None
-        metadata_tbl["runFinished"] = False
-        metadata_tbl["DoesInstanceExistAfterStatus"] = None
-        metadata_tbl["DoesStateStoreRecordExistAfterStatus"] = None
-        metadata_tbl["DoesTargetFolderPathExistAfterStatus"] = None
-        metadata_tbl["DoesDwgDropFolderPathExistAfterStatus"] = None
-        metadata_tbl["DeletedStateStoreRecordTimestamp"] = None
-        metadata_tbl["DeletedTargetFolderPathTimestamp"] = None
-        metadata_tbl["DeletedDwgDropFolderPathTimestamp"] = None
-        metadata_tbl["DeletedInstanceTimestamp"] = None
-    else:
-        metadata_tbl["runend"] = get_current_time()
-        metadata_tbl["runFinished"] = True
-        metadata_tbl["InstanceDetectedTimestamp"] = metadata_tbl.apply(
-            lambda r: get_current_time() if pd.notnull(r["space"]) else None,
-            axis=1,
-        )
-        metadata_tbl["StateStoreRecordDetectedTimestamp"] = metadata_tbl.apply(
-            lambda r: get_current_time() if pd.notnull(r["high"]) else None,
-            axis=1,
-        )
-        metadata_tbl["TargetFolderPathDetectedTimestamp"] = metadata_tbl.apply(
-            lambda r: get_current_time() if r["target_filepath_Exist"] else None,
-            axis=1,
-        )
-        metadata_tbl["DwgDropFolderPathDetectedTimestamp"] = metadata_tbl.apply(
-            lambda r: get_current_time() if r["dwg_drop_path_Exist"] else None,
-            axis=1,
-        )
+    metadata_tbl["DoesInstanceExistBeforeStatus"] = metadata_tbl.apply(
+        lambda r: True if pd.notnull(r["space"]) else False,
+        axis=1,
+    )
+    metadata_tbl["DoesStateStoreRecordExistBeforeStatus"] = metadata_tbl.apply(
+        lambda r: True if pd.notnull(r["high"]) else False,
+        axis=1,
+    )
+    metadata_tbl["DoesTargetFolderPathExistBeforeStatus"] = metadata_tbl.apply(
+        lambda r: r["target_filepath_Exist"],
+        axis=1,
+    )
+    metadata_tbl["DoesDwgDropFolderPathExistBeforeStatus"] = metadata_tbl.apply(
+        lambda r: r["dwg_drop_path_Exist"] if pd.notnull(r["dwg_drop_path_Exist"]) else None,
+        axis=1,
+    )
+    metadata_tbl["runend"] = None
+    metadata_tbl["runFinished"] = False
+    metadata_tbl["DoesInstanceExistAfterStatus"] = None
+    metadata_tbl["DoesStateStoreRecordExistAfterStatus"] = None
+    metadata_tbl["DoesTargetFolderPathExistAfterStatus"] = None
+    metadata_tbl["DoesDwgDropFolderPathExistAfterStatus"] = None
+    metadata_tbl["DeletedStateStoreRecordTimestamp"] = None
+    metadata_tbl["DeletedTargetFolderPathTimestamp"] = None
+    metadata_tbl["DeletedDwgDropFolderPathTimestamp"] = None
+    metadata_tbl["DeletedInstanceTimestamp"] = None
 
     metadata_tbl["CurrentDeleteFlag"] = metadata_tbl.apply(
         lambda r: True if r["Cognite_Delete"] == 1 else False,

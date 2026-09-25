@@ -5,7 +5,6 @@ rawTables:
   rawTableMetadata: tbl_indp_edms_files_metadata_ken
   rawTableFileStateStore: tbl_edms_files_ken_state
   rawTableDeleteTrackerTbl: tbl_edms_files_ken_delete_event
-  rawTableResurrectTrackerTbl: tbl_edms_files_ken_resurrect_event
 
 dataModelViews:
   schemaSpace: cdf_cdm

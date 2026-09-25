@@ -8,17 +8,6 @@ from cognite.client.exceptions import CogniteAPIError
 
 logger = logging.getLogger(__name__)
 
-EXISTENCE_STATUS_COLUMNS = (
-    "DoesInstanceExistBeforeStatus",
-    "DoesInstanceExistAfterStatus",
-    "DoesStateStoreRecordExistBeforeStatus",
-    "DoesStateStoreRecordExistAfterStatus",
-    "DoesDwgDropFolderPathExistBeforeStatus",
-    "DoesDwgDropFolderPathExistAfterStatus",
-    "DoesTargetFolderPathExistBeforeStatus",
-    "DoesTargetFolderPathExistAfterStatus",
-)
-
 
 def ensure_raw_database(client: CogniteClient, db_name: str) -> None:
     existing_names = {database.name for database in client.raw.databases.list(limit=None)}
@@ -145,7 +134,6 @@ def get_delete_state_tracker_tbl(
     client: CogniteClient,
     db_config: str,
     tbl_config: str,
-    cognite_delete_flag: bool,
 ) -> pd.DataFrame:
     tbls_available = [table.name for table in client.raw.tables.list(db_name=db_config, limit=None)]
 
@@ -164,33 +152,19 @@ def get_delete_state_tracker_tbl(
         "CurrentDeleteFlag": "N/A",
         "Cognite_Id": "N/A",
         "Cognite_Ingest": "N/A",
+        "DoesInstanceExistBeforeStatus": "N/A",
+        "DoesInstanceExistAfterStatus": "N/A",
+        "DoesStateStoreRecordExistBeforeStatus": "N/A",
+        "DoesStateStoreRecordExistAfterStatus": "N/A",
+        "DoesDwgDropFolderPathExistBeforeStatus": "N/A",
+        "DoesDwgDropFolderPathExistAfterStatus": "N/A",
+        "DoesTargetFolderPathExistBeforeStatus": "N/A",
+        "DoesTargetFolderPathExistAfterStatus": "N/A",
+        "DeletedInstanceTimestamp": "0101-01-01 00:00:00",
+        "DeletedStateStoreRecordTimestamp": "0101-01-01 00:00:00",
+        "DeletedDwgDropFolderPathTimestamp": "0101-01-01 00:00:00",
+        "DeletedTargetFolderPathTimestamp": "0101-01-01 00:00:00",
     }
-    if cognite_delete_flag:
-        custom_dummy_values.update(
-            {
-                "DoesInstanceExistBeforeStatus": "N/A",
-                "DoesInstanceExistAfterStatus": "N/A",
-                "DoesStateStoreRecordExistBeforeStatus": "N/A",
-                "DoesStateStoreRecordExistAfterStatus": "N/A",
-                "DoesDwgDropFolderPathExistBeforeStatus": "N/A",
-                "DoesDwgDropFolderPathExistAfterStatus": "N/A",
-                "DoesTargetFolderPathExistBeforeStatus": "N/A",
-                "DoesTargetFolderPathExistAfterStatus": "N/A",
-                "DeletedInstanceTimestamp": "0101-01-01 00:00:00",
-                "DeletedStateStoreRecordTimestamp": "0101-01-01 00:00:00",
-                "DeletedDwgDropFolderPathTimestamp": "0101-01-01 00:00:00",
-                "DeletedTargetFolderPathTimestamp": "0101-01-01 00:00:00",
-            }
-        )
-    else:
-        custom_dummy_values.update(
-            {
-                "InstanceDetectedTimestamp": "0101-01-01 00:00:00",
-                "StateStoreRecordDetectedTimestamp": "0101-01-01 00:00:00",
-                "DwgDropFolderPathDetectedTimestamp": "0101-01-01 00:00:00",
-                "TargetFolderPathDetectedTimestamp": "0101-01-01 00:00:00",
-            }
-        )
 
     dummy_df = pd.DataFrame([custom_dummy_values]).set_index("key")
 
@@ -212,23 +186,5 @@ def get_delete_state_tracker_tbl(
         logger.info("Dummy row missing from '%s'; re-inserting.", tbl_config)
         client.raw.rows.insert_dataframe(db_name=db_config, table_name=tbl_config, dataframe=dummy_df)
         existing = client.raw.rows.retrieve_dataframe(db_name=db_config, table_name=tbl_config, limit=None)
-
-    if not cognite_delete_flag:
-        extra_columns = [column for column in EXISTENCE_STATUS_COLUMNS if column in existing.columns]
-        if extra_columns:
-            logger.info(
-                "Removing existence-status columns from resurrect tracker '%s': %s",
-                tbl_config,
-                extra_columns,
-            )
-            keys = existing.index.astype(str).tolist()
-            if keys:
-                client.raw.rows.delete(db_name=db_config, table_name=tbl_config, key=keys)
-            cleaned = existing.drop(columns=extra_columns, errors="ignore")
-            cleaned = cleaned.loc[~cleaned.index.astype(str).isin(["DummyRowKey"])]
-            client.raw.rows.insert_dataframe(db_name=db_config, table_name=tbl_config, dataframe=dummy_df)
-            if not cleaned.empty:
-                client.raw.rows.insert_dataframe(db_name=db_config, table_name=tbl_config, dataframe=cleaned)
-            return client.raw.rows.retrieve_dataframe(db_name=db_config, table_name=tbl_config, limit=None)
 
     return existing
