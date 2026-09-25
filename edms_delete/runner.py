@@ -149,18 +149,14 @@ class EdmsDeleteRunner:
             delete_targetfiles_results=delete_targetfiles_results,
         )
 
+        delete_tracker_tbl_df = self._remove_empty_timestamp_rows(delete_tracker_tbl_df, runid)
+
         run_end_timestamp = self._finalize_run(delete_tracker_tbl_df, runid)
         self._upsert_run_summary(runid, nowtime, run_end_timestamp, True)
-        self._cleanup_empty_timestamp_rows(runid)
 
-    def _cleanup_empty_timestamp_rows(self, runid: str) -> None:
-        delete_tracker_tbl_df = load_raw_tbl(
-            self.client,
-            self.config.raw_db_deletion_extractor,
-            self.config.raw_table_delete_tracker,
-        )
+    def _remove_empty_timestamp_rows(self, delete_tracker_tbl_df: pd.DataFrame, runid: str) -> pd.DataFrame:
         if delete_tracker_tbl_df.empty or "RunId" not in delete_tracker_tbl_df.columns:
-            return
+            return delete_tracker_tbl_df
 
         timestamp_columns = [
             "DeletedInstanceTimestamp",
@@ -176,21 +172,21 @@ class EdmsDeleteRunner:
                 "Skipping empty-timestamp cleanup; missing columns: %s",
                 missing_timestamp_columns,
             )
-            return
+            return delete_tracker_tbl_df
 
-        current_run_df = delete_tracker_tbl_df[delete_tracker_tbl_df["RunId"].astype(str) == runid]
-        empty_timestamp_mask = current_run_df[timestamp_columns].isna().all(axis=1)
+        current_run_mask = delete_tracker_tbl_df["RunId"].astype(str) == runid
+        empty_timestamp_mask = current_run_mask & delete_tracker_tbl_df[timestamp_columns].isna().all(axis=1)
         keys_to_delete = [
             key
-            for key in current_run_df.loc[empty_timestamp_mask].index.astype(str).tolist()
+            for key in delete_tracker_tbl_df.loc[empty_timestamp_mask].index.astype(str).tolist()
             if key != "DummyRowKey"
         ]
         if not keys_to_delete:
             logger.info("No empty-timestamp rows to remove for run %s.", runid)
-            return
+            return delete_tracker_tbl_df
 
         logger.info(
-            "Removing %s empty-timestamp row(s) for run %s.",
+            "Removing %s empty-timestamp row(s) for run %s; skipping finalize write for those rows.",
             len(keys_to_delete),
             runid,
         )
@@ -199,6 +195,7 @@ class EdmsDeleteRunner:
             table_name=self.config.raw_table_delete_tracker,
             key=keys_to_delete,
         )
+        return delete_tracker_tbl_df.loc[~empty_timestamp_mask].copy()
 
     def _insert_preliminary_delete_state(
         self,
@@ -322,6 +319,10 @@ class EdmsDeleteRunner:
 
         current_run_df = delete_tracker_tbl_df.loc[current_run_mask].copy()
         current_run_df = current_run_df.astype("object").where(current_run_df.notna(), None)
+
+        if current_run_df.empty:
+            logger.info("Completed run %s; no delete-tracker rows to finalize.", runid)
+            return run_end_timestamp
 
         self.client.raw.rows.insert_dataframe(
             db_name=self.config.raw_db_deletion_extractor,

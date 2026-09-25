@@ -5,7 +5,7 @@ rawTables:
   rawTableMetadata: tbl_indp_edms_files_metadata_ken
   rawTableFileStateStore: tbl_edms_files_ken_state
   rawTableDeleteTrackerTbl: tbl_edms_files_ken_delete_event
-  rawDbDeletionExtractorSummary: tbl_edms_files_ken_delete_summary
+  rawTableDeletionExtractorSummary: tbl_edms_files_ken_delete_summary
 
 dataModelViews:
   schemaSpace: cdf_cdm
