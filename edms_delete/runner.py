@@ -62,7 +62,7 @@ class EdmsDeleteRunner:
 
         ensure_raw_database(self.client, self.config.raw_db_deletion_extractor)
 
-        delete_tracker_tbl_df = get_delete_state_tracker_tbl(
+        get_delete_state_tracker_tbl(
             self.client,
             self.config.raw_db_deletion_extractor,
             self.config.raw_table_delete_tracker,
@@ -74,41 +74,33 @@ class EdmsDeleteRunner:
         )
         self._upsert_run_summary(runid, nowtime, None, False)
 
-        if not metadata_tbl_df.empty:
-            self._insert_preliminary_delete_state(
-                metadata_tbl_df=metadata_tbl_df,
-                statestore_tbl_df=statestore_tbl_df,
-                cognite_file_tbl_df=cognite_file_tbl_df,
-                delete_tracker_tbl_df=delete_tracker_tbl_df,
-                nowtime=nowtime,
-                runid=runid,
-            )
-            delete_tracker_tbl_df = load_raw_tbl(
-                self.client,
-                self.config.raw_db_deletion_extractor,
-                self.config.raw_table_delete_tracker,
-            )
-            delete_tracker_tbl_df = delete_tracker_tbl_df[delete_tracker_tbl_df["RunId"] == runid]
+        delete_tracker_tbl_df = self._build_delete_state(
+            metadata_tbl_df=metadata_tbl_df,
+            statestore_tbl_df=statestore_tbl_df,
+            cognite_file_tbl_df=cognite_file_tbl_df,
+            nowtime=nowtime,
+            runid=runid,
+        )
 
-        delete_list_instances = get_delete_list_from_source(
+        delete_list_instances = self._get_delete_list(
             delete_tracker_tbl_df,
             "DoesInstanceExistBeforeStatus",
             "external_id",
             runid,
         )
-        delete_list_statestore = get_delete_list_from_source(
+        delete_list_statestore = self._get_delete_list(
             delete_tracker_tbl_df,
             "DoesStateStoreRecordExistBeforeStatus",
             "external_id",
             runid,
         )
-        delete_list_dwgdropfolder = get_delete_list_from_source(
+        delete_list_dwgdropfolder = self._get_delete_list(
             delete_tracker_tbl_df,
             "DoesDwgDropFolderPathExistBeforeStatus",
             "dwg_drop_path_defined",
             runid,
         )
-        delete_list_targetfolder = get_delete_list_from_source(
+        delete_list_targetfolder = self._get_delete_list(
             delete_tracker_tbl_df,
             "DoesTargetFolderPathExistBeforeStatus",
             "target_filepath_defined",
@@ -140,21 +132,41 @@ class EdmsDeleteRunner:
             self.config.target_folder_path,
         )
 
-        delete_tracker_tbl_df = self._apply_all_deletion_results(
-            delete_tracker_tbl_df=delete_tracker_tbl_df,
-            runid=runid,
-            delete_instance_results=delete_instance_results,
-            delete_statestore_results=delete_statestore_results,
-            delete_dwgdropfiles_results=delete_dwgdropfiles_results,
-            delete_targetfiles_results=delete_targetfiles_results,
-        )
-
-        delete_tracker_tbl_df = self._remove_empty_timestamp_rows(delete_tracker_tbl_df, runid)
+        if not delete_tracker_tbl_df.empty:
+            delete_tracker_tbl_df = self._apply_all_deletion_results(
+                delete_tracker_tbl_df=delete_tracker_tbl_df,
+                runid=runid,
+                delete_instance_results=delete_instance_results,
+                delete_statestore_results=delete_statestore_results,
+                delete_dwgdropfiles_results=delete_dwgdropfiles_results,
+                delete_targetfiles_results=delete_targetfiles_results,
+            )
+            delete_tracker_tbl_df = self._keep_rows_with_deletion_timestamps(delete_tracker_tbl_df, runid)
 
         run_end_timestamp = self._finalize_run(delete_tracker_tbl_df, runid)
         self._upsert_run_summary(runid, nowtime, run_end_timestamp, True)
 
-    def _remove_empty_timestamp_rows(self, delete_tracker_tbl_df: pd.DataFrame, runid: str) -> pd.DataFrame:
+    def _get_delete_list(
+        self,
+        delete_tracker_tbl_df: pd.DataFrame,
+        field_to_filter_on: str,
+        field_to_return: str,
+        runid: str,
+    ) -> list[Any]:
+        if delete_tracker_tbl_df.empty:
+            return []
+        return get_delete_list_from_source(
+            delete_tracker_tbl_df,
+            field_to_filter_on,
+            field_to_return,
+            runid,
+        )
+
+    def _keep_rows_with_deletion_timestamps(
+        self,
+        delete_tracker_tbl_df: pd.DataFrame,
+        runid: str,
+    ) -> pd.DataFrame:
         if delete_tracker_tbl_df.empty or "RunId" not in delete_tracker_tbl_df.columns:
             return delete_tracker_tbl_df
 
@@ -169,43 +181,33 @@ class EdmsDeleteRunner:
         ]
         if missing_timestamp_columns:
             logger.info(
-                "Skipping empty-timestamp cleanup; missing columns: %s",
+                "Skipping empty-timestamp filter; missing columns: %s",
                 missing_timestamp_columns,
             )
             return delete_tracker_tbl_df
 
         current_run_mask = delete_tracker_tbl_df["RunId"].astype(str) == runid
         empty_timestamp_mask = current_run_mask & delete_tracker_tbl_df[timestamp_columns].isna().all(axis=1)
-        keys_to_delete = [
-            key
-            for key in delete_tracker_tbl_df.loc[empty_timestamp_mask].index.astype(str).tolist()
-            if key != "DummyRowKey"
-        ]
-        if not keys_to_delete:
-            logger.info("No empty-timestamp rows to remove for run %s.", runid)
-            return delete_tracker_tbl_df
-
-        logger.info(
-            "Removing %s empty-timestamp row(s) for run %s; skipping finalize write for those rows.",
-            len(keys_to_delete),
-            runid,
-        )
-        self.client.raw.rows.delete(
-            db_name=self.config.raw_db_deletion_extractor,
-            table_name=self.config.raw_table_delete_tracker,
-            key=keys_to_delete,
-        )
+        dropped_count = int(empty_timestamp_mask.sum())
+        if dropped_count:
+            logger.info(
+                "Skipping delete-tracker write for %s row(s) with all deletion timestamps null.",
+                dropped_count,
+            )
         return delete_tracker_tbl_df.loc[~empty_timestamp_mask].copy()
 
-    def _insert_preliminary_delete_state(
+    def _build_delete_state(
         self,
         metadata_tbl_df: pd.DataFrame,
         statestore_tbl_df: pd.DataFrame,
         cognite_file_tbl_df: pd.DataFrame,
-        delete_tracker_tbl_df: pd.DataFrame,
         nowtime: str,
         runid: str,
-    ) -> None:
+    ) -> pd.DataFrame:
+        if metadata_tbl_df.empty:
+            logger.info("Metadata is empty; skipping delete-state generation.")
+            return pd.DataFrame()
+
         generate_state_results = generate_state(
             metadata_tbl_df,
             self.config.dwg_drop_folder_path,
@@ -217,20 +219,11 @@ class EdmsDeleteRunner:
             runid,
         )
         if generate_state_results is None:
-            logger.info("No Cognite_Delete == 1 rows; skipping delete-tracker insert.")
-            return
+            logger.info("No Cognite_Delete == 1 rows; nothing to delete this run.")
+            return pd.DataFrame()
 
-        logger.info(
-            "Inserting preliminary state into %s.%s (%s rows in tracker before insert).",
-            self.config.raw_db_deletion_extractor,
-            self.config.raw_table_delete_tracker,
-            len(delete_tracker_tbl_df),
-        )
-        self.client.raw.rows.insert_dataframe(
-            db_name=self.config.raw_db_deletion_extractor,
-            table_name=self.config.raw_table_delete_tracker,
-            dataframe=generate_state_results,
-        )
+        logger.info("Built in-memory delete state for %s flagged file(s).", len(generate_state_results))
+        return generate_state_results
 
     def _apply_all_deletion_results(
         self,
@@ -295,6 +288,11 @@ class EdmsDeleteRunner:
         return delete_tracker_tbl_df
 
     def _finalize_run(self, delete_tracker_tbl_df: pd.DataFrame, runid: str) -> str:
+        run_end_timestamp = get_current_time()
+        if delete_tracker_tbl_df.empty or "RunId" not in delete_tracker_tbl_df.columns:
+            logger.info("Completed run %s; no delete-tracker rows to finalize.", runid)
+            return run_end_timestamp
+
         current_run_mask = delete_tracker_tbl_df["RunId"].eq(runid)
 
         if "runend" not in delete_tracker_tbl_df.columns:
@@ -313,7 +311,6 @@ class EdmsDeleteRunner:
                 .where(delete_tracker_tbl_df["runFinished"].notna(), None)
             )
 
-        run_end_timestamp = get_current_time()
         delete_tracker_tbl_df.loc[current_run_mask, "runend"] = run_end_timestamp
         delete_tracker_tbl_df.loc[current_run_mask, "runFinished"] = True
 
