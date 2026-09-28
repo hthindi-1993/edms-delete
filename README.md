@@ -59,6 +59,7 @@ The extractor reads the site's configuration from CDF at startup, so changing a 
 - Windows, with network access to your CDF cluster
 - Local access to each site's target folder and DWG drop folder
 - A Windows account to run the scheduled task, with **delete** rights on those folders
+- Make sure that in the site's windows task scheduler tasks, you are referencing the latest custom extractor **doclib_extractor-1.0.75-win32.exe**
 
 ### In CDF
 
