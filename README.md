@@ -1,387 +1,355 @@
-# EDMS Delete
+# EDMS Delete Extractor — Deployment Guide
 
-Orchestrates deletion of EDMS files across three layers:
+The EDMS Delete Extractor removes EDMS files that have been flagged for deletion. For every file whose metadata row has `Cognite_Delete = 1`, it removes that file from:
 
-1. **CDF data model instances** (`CogniteFile` nodes in an instance space)
-2. **CDF RAW file state-store rows** (upload / extractor state)
-3. **Files on the VM** (target folder and DWG/DGN drop folder)
+1. **Cognite Data Fusion (CDF) data model** — the `CogniteFile` instance
+2. **CDF RAW file state store** — the upload extractor's state row for that file
+3. **The VM** — the file in the target folder, and (for DWG/DGN files) the file in the DWG drop folder
 
-It also records every run in a RAW **delete** tracker table so operators can audit what was removed and what failed, plus a **run summary** table with one row per run (`RunId`, `runstart`, `runend`, `runFinished`).
+Every run is recorded in CDF RAW so you can audit what was deleted and when.
 
-Configuration is loaded from a Cognite extraction pipeline YAML (same pattern as `csv-extractor`).
+> **Warning:** This tool permanently deletes CDF instances, RAW rows, and files on disk. Validate each site's configuration and metadata flags in a test environment before scheduling it in production.
 
 ---
 
-## Table of contents
+## Contents
 
-- [What this script does](#what-this-script-does)
+- [How multi-site deployment works](#how-multi-site-deployment-works)
 - [Prerequisites](#prerequisites)
-- [Configuration](#configuration)
-- [How a run works](#how-a-run-works)
-- [Identifier and path derivation](#identifier-and-path-derivation)
-- [Deletion eligibility](#deletion-eligibility)
-- [Deletion operations](#deletion-operations)
-- [Tracker columns and semantics](#tracker-columns-and-semantics)
-- [Logging](#logging)
-- [Run locally](#run-locally)
-- [Build executable](#build-executable)
-- [Package layout](#package-layout)
-- [Operational notes](#operational-notes)
+- [One-time setup on the VM](#one-time-setup-on-the-vm)
+- [Adding a site](#adding-a-site)
+- [Scheduling runs](#scheduling-runs)
+- [Checking that a run worked](#checking-that-a-run-worked)
+- [What gets written to CDF](#what-gets-written-to-cdf)
+- [Troubleshooting](#troubleshooting)
+- [Upgrading](#upgrading)
+- [Building the executable (developers)](#building-the-executable-developers)
 
 ---
 
-## What this script does
+## How multi-site deployment works
 
-Given a metadata RAW table that flags files with `Cognite_Delete == 1`, each run:
+One executable and one credentials file serve every site. What changes per site is an **extraction pipeline** in CDF, which holds that site's configuration.
 
-1. Loads metadata, state-store, DM file instances, and ensures the delete tracker and run-summary tables exist.
-2. Inserts a **preliminary run-summary** row (`RunId`, `runstart`; `runend` null, `runFinished` false).
-3. Builds an in-memory delete state for `Cognite_Delete == 1` rows (not written to the delete tracker yet).
-4. Deletes, for the current run only, resources that existed **before** this run:
-   - DM file instances
-   - state-store RAW rows
-   - files under the DWG drop folder (DGN/DWG only)
-   - files under the target folder
-5. Writes delete-tracker rows only when at least one deletion timestamp is set, then upserts `runend` / `runFinished` on the summary row.
+```text
+VM
+├── edms_delete-0.1.0-win32.exe      one copy, shared by all sites
+├── .env                             CDF credentials, shared by all sites
+├── run_mtz.bat                      one small launcher per site
+├── run_abc.bat
+└── Logs\
 
-Nothing is deleted unless the corresponding **before-status** flag is `True` for that resource on a current-run tracker row with `CurrentDeleteFlag == True`.
+CDF
+├── Extraction pipeline ep_src_indp_edms_deletes_mtz   config for site "mtz"
+└── Extraction pipeline ep_src_indp_edms_deletes_abc   config for site "abc"
+```
+
+Each run takes two arguments: the `.env` file and the extraction pipeline external ID for that site.
+
+```powershell
+edms_delete-0.1.0-win32.exe .env ep_src_indp_edms_deletes_mtz
+```
+
+The extractor reads the site's configuration from CDF at startup, so changing a site's tables or folders means editing its extraction pipeline config in CDF. You don't need to redeploy anything on the VM.
 
 ---
 
 ## Prerequisites
 
-1. Poetry and dependencies:
+### On the VM
 
-   ```powershell
-   cd edms-delete
-   poetry install
-   ```
+- Windows, with network access to your CDF cluster
+- Local access to each site's target folder and DWG drop folder
+- A Windows account to run the scheduled task, with **delete** rights on those folders
 
-2. A `.env` file with CDF credentials:
+### In CDF
 
-   | Variable | Purpose |
-   |----------|---------|
-   | `CDF_PROJECT` | CDF project name |
-   | `CDF_CLUSTER` | Cluster (used in API base URL and OAuth scope) |
-   | `IDP_TENANT_ID` | Azure AD tenant |
-   | `IDP_CLIENT_ID` | App registration client ID |
-   | `IDP_CLIENT_SECRET` | App registration secret |
+A service principal (app registration) whose group has these capabilities:
 
-3. An extraction pipeline in CDF whose config YAML includes `rawTables`, `dataModelViews`, and `vmProperties` (see `EXTRACTION_PIPELINE_CONFIG_EXAMPLE.yaml`).
+| Capability | Actions | Scope |
+|------------|---------|-------|
+| RAW | Read, Write | Metadata, file state-store, and deletion-extractor databases |
+| Data model instances | Read, Write | Each site's instance space |
+| Data models | Read | `cdf_cdm` (for the `CogniteFile` view) |
+| Extraction pipelines | Read | The site pipelines |
+| Extraction configs | Read | The site pipelines |
+| Files | Read | Used for the connection check at startup |
 
-4. Network access from the host/VM to CDF, and local filesystem access to the configured target and DWG drop folders.
+The extractor creates the deletion-extractor database and its tables if they are missing. If your RAW access is scoped to specific databases, create that database up front so the extractor doesn't need permission to create it.
 
----
+### Data that must already exist
 
-## Configuration
+- **Metadata RAW table**, one row per file, with these columns:
 
-Config is **not** read from a local YAML file at runtime. The CLI takes an extraction pipeline external ID; the script retrieves that pipeline’s config from CDF and parses it.
+  | Column | Meaning |
+  |--------|---------|
+  | `primary_key` | Unique file identifier |
+  | `File_Type_Short_Name` | File type, e.g. `PDF`, `DWG`, `DGN` |
+  | `Cognite_Delete` | `1` means delete this file; any other value means keep it |
+  | `Cognite_Ingest` | Carried into the delete tracker for reference |
+  | `Cognite_Id` | Optional. File name in the target folder, if it differs from the default |
 
-### Required sections
-
-#### `rawTables`
-
-| Key | Role |
-|-----|------|
-| `rawDbMetadata` | Database for the metadata table |
-| `rawTableMetadata` | Source of truth for which files are flagged for delete (`Cognite_Delete`) |
-| `rawDbDeletionExtractor` | Database for the delete tracker and run-summary tables (created if missing) |
-| `rawDbFileStateStore` | Database for the file upload state store |
-| `rawTableFileStateStore` | State-store table (row key = instance external ID) |
-| `rawTableDeleteTrackerTbl` | Per-run delete audit / work queue |
-| `rawTableDeletionExtractorSummary` | One row per run with `RunId`, `runstart`, `runend`, `runFinished` |
-
-#### `dataModelViews`
-
-| Key | Role |
-|-----|------|
-| `schemaSpace` | View schema space (e.g. `cdf_cdm`) |
-| `dmExternalId` | Data model external ID (informational in config) |
-| `viewName` | View used to list/delete file nodes (e.g. `CogniteFile`) |
-| `version` | View version |
-| `instanceSpace` | Space where file instances live |
-| `instanceExternalIdPrefix` | Prefix prepended when deriving instance `external_id` |
-
-#### `vmProperties`
-
-| Key | Role |
-|-----|------|
-| `targetFolderPath` | Directory of ingested/target files (trailing path separator expected) |
-| `dwgDropFolderPath` | Directory of CAD drop files for DGN/DWG (trailing path separator expected) |
-
-#### `logger` (optional)
-
-If omitted, logs go to the console at INFO.
-
-| Key | Role |
-|-----|------|
-| `console.level` | Console log level |
-| `file.level` | File log level |
-| `file.path` | Log file path (prefer absolute for Task Scheduler / `.exe`) |
-| `file.per_run` | `true`: one file per run (`stem_<run_id>.log`); `false`: append to a single file |
-| `file.retention` | When `per_run` is true, delete matching log files older than N days; `0` keeps all |
-
-See `EXTRACTION_PIPELINE_CONFIG_EXAMPLE.yaml` for a full example.
+- **File state-store RAW table** written by the EDMS upload extractor
+- **`CogniteFile` instances** in the site's instance space
 
 ---
 
-## How a run works
+## One-time setup on the VM
 
-Entry point: `edms_delete.__main__:main` (or the packaged `.exe`).
+### 1. Create an install folder
 
-```text
-.env + pipeline_ext_id
-        │
-        ▼
-Authenticate CogniteClient
-        │
-        ▼
-Load extraction pipeline YAML → EdmsDeleteConfig
-        │
-        ▼
-EdmsDeleteRunner.run()
+For example `D:\Cognite_psaas\FileDeleteExtractor\`, and copy `edms_delete-0.1.0-win32.exe` into it.
+
+### 2. Create the `.env` credentials file
+
+Create a file named `.env` in the same folder:
+
+```ini
+CDF_PROJECT=<cdf-project-name>
+CDF_CLUSTER=<cluster>            # e.g. westeurope-1
+IDP_TENANT_ID=<azure-tenant-id>
+IDP_CLIENT_ID=<app-registration-client-id>
+IDP_CLIENT_SECRET=<app-registration-secret>
 ```
 
-### Step-by-step
-
-#### 1. Run identity and logging
-
-- `runstart` / clock values use UTC as `YYYY-MM-DD HH:MM:SS`.
-- `RunId` is an MD5 hash of that timestamp string.
-- If file logging with `per_run: true` is configured, the file handler is (re)attached using this `RunId`.
-
-#### 2. Load source data
-
-| Source | How it is loaded |
-|--------|------------------|
-| Metadata keep table | RAW rows from `rawDbMetadata`.`rawTableMetadata`; for tables whose name contains `tbl_indp_edms_files_metadata`, only `File_Type_Short_Name`, `Cognite_Delete`, `primary_key`, and optional `Cognite_Id` are fetched |
-| File state store | Full RAW table |
-| DM file instances | All nodes in `instanceSpace` for the configured view (`external_id`, `space`) |
-| Delete tracker | In `rawDbDeletionExtractor`; database is created if missing; table is created with a dummy row if missing/empty |
-| Run summary | Same database; table from `rawTableDeletionExtractorSummary`; created with a dummy row if missing/empty |
-
-#### 3. Preliminary run summary
-
-Inserts one summary row keyed by `RunId` with `runstart` populated, `runend` null, and `runFinished` false. That row is later upserted at finalize.
-
-#### 4. Build in-memory delete state (only if metadata is non-empty)
-
-Builds a delete-state snapshot for `Cognite_Delete == 1` rows (skipped when none exist). This stays in memory until finalize; the delete tracker is not written yet.
-
-If metadata is empty, state generation is skipped; deletion lists are empty.
-
-#### 5. Build delete lists
-
-For the current run, four lists are built (see [Deletion eligibility](#deletion-eligibility)):
-
-| List | Filter column (must be boolean `True`) | Value returned |
-|------|----------------------------------------|----------------|
-| DM instances | `DoesInstanceExistBeforeStatus` | `external_id` |
-| State store | `DoesStateStoreRecordExistBeforeStatus` | `external_id` |
-| DWG drop files | `DoesDwgDropFolderPathExistBeforeStatus` | `dwg_drop_path_defined` |
-| Target files | `DoesTargetFolderPathExistBeforeStatus` | `target_filepath_defined` |
-
-#### 6. Perform deletions
-
-Each list is passed to the matching operation (see [Deletion operations](#deletion-operations)). Operations are independent: a failure or empty list in one does not skip the others.
-
-#### 7. Apply results to the tracker
-
-For each resource type, current-run rows are updated with:
-
-- `Does*ExistAfterStatus` — whether the identifier still exists after the operation
-- `Deleted*Timestamp` — set only when the identifier appears in that operation’s `deleted_actual` set
-
-#### 8. Keep rows with deletion timestamps
-
-Any current-`RunId` row where **all four** of these are still null is dropped in memory and never written to the delete tracker:
-
-- `DeletedInstanceTimestamp`
-- `DeletedStateStoreRecordTimestamp`
-- `DeletedTargetFolderPathTimestamp`
-- `DeletedDwgDropFolderPathTimestamp`
-
-Those are files that were queued this run but had nothing actually deleted. Rows with at least one deletion timestamp stay as audit history.
-
-#### 9. Finalize
-
-For remaining current-run rows:
-
-- `runend` = current UTC timestamp
-- `runFinished` = `True`
-
-Those rows are written to the delete tracker via `insert_dataframe` (upsert by row key). If none remain, the delete tracker is not written.
-
-The run-summary row for this `RunId` is upserted with the same `runstart` plus `runend` and `runFinished = True`. `DummyRowKey` is kept on that table.
+Restrict read access to this file. It contains a client secret.
 
 ---
 
-## Identifier and path derivation
+## Adding a site
 
-For each metadata row considered during state generation:
+Repeat these steps for every site. The examples use the site code `mtz`; replace it with your own.
 
-| Field | Derivation |
-|-------|------------|
-| `sourceId` | `Cognite_Id` (trimmed) if present and non-empty; otherwise `{raw_row_key}.{type}` where DGN/DWG become `{key}.dgn.pdf` / `{key}.dwg.pdf`, and other types use the short name as the extension |
-| `target_filepath_defined` | `{targetFolderPath}{sourceId}` |
-| `external_id` | `{instanceExternalIdPrefix}` + SHA-1 hex digest of `target_filepath_defined` |
-| `dwg_drop_path_defined` | For DGN/DWG only: `{dwgDropFolderPath}{raw_row_key}.{filetype}`; otherwise `null` |
-| Tracker row `key` | `{RunId}\|{primary_key}` |
+### 1. Create the extraction pipeline in CDF
 
-### Existence probes used for “before” status
+In CDF, create an extraction pipeline with the external ID `ep_src_indp_edms_deletes_<site>`, for example `ep_src_indp_edms_deletes_mtz`. Open its **Configuration** and paste in the site config from the next step.
 
-| Resource | Considered present when |
-|----------|-------------------------|
-| DM instance | Left-join to instances yields a non-null `space` |
-| State-store row | Left-join to state store yields a non-null `high` |
-| Target file | `target_filepath_defined` appears in a scandir of the target folder |
-| DWG drop file | For DGN/DWG, `dwg_drop_path_defined` appears in a scandir of the drop folder; otherwise `null` (N/A) |
+### 2. Fill in the site configuration
 
-Directory scans return **files only** (not subdirectories). If a configured folder does not exist, the scan returns an empty set (nothing is treated as present on disk).
+```yaml
+rawTables:
+  # Existing databases/tables
+  rawDbMetadata: db_indp_edms_files_metadata_ref
+  rawTableMetadata: tbl_indp_edms_files_metadata_mtz
+  rawDbFileStateStore: db_edms_files_upload_ref
+  rawTableFileStateStore: tbl_edms_files_mtz_state
+
+  # Written by this extractor (created if missing)
+  rawDbDeletionExtractor: db_edms_files_delete_extractor_ref
+  rawTableDeleteTrackerTbl: tbl_edms_files_mtz_delete_event
+  rawTableDeletionExtractorSummary: tbl_edms_files_mtz_delete_summary
+
+dataModelViews:
+  schemaSpace: cdf_cdm
+  dmExternalId: CogniteCore
+  viewName: CogniteFile
+  version: v1
+  instanceSpace: sp_dat_edms_files_mtz
+  instanceExternalIdPrefix: edms_
+
+vmProperties:
+  targetFolderPath: D:\Data\edms\target\mtz\
+  dwgDropFolderPath: D:\Data\edms\dwg-drop\mtz\
+
+logger:
+  console:
+    level: INFO
+  file:
+    level: DEBUG
+    path: D:\Cognite_psaas\FileDeleteExtractor\Logs\mtz\edms-deletes-mtz.log
+    per_run: true
+    retention: 30
+```
+
+#### What usually changes per site
+
+| Setting | Shared or per site | Notes |
+|---------|--------------------|-------|
+| `rawDbMetadata`, `rawDbFileStateStore`, `rawDbDeletionExtractor` | Usually shared | One database can hold tables for many sites |
+| `rawTableMetadata`, `rawTableFileStateStore` | Per site | Must match the tables the upload process already uses |
+| `rawTableDeleteTrackerTbl`, `rawTableDeletionExtractorSummary` | Per site | Give each site its own tables |
+| `instanceSpace` | Per site | Space holding that site's `CogniteFile` instances |
+| `schemaSpace`, `dmExternalId`, `viewName`, `version` | Shared | Leave as shown unless you use a different view |
+| `instanceExternalIdPrefix` | Usually shared | Must match the upload extractor's prefix |
+| `targetFolderPath`, `dwgDropFolderPath` | Per site | See the path rules below |
+| `logger.file.path` | Per site | Keeps each site's logs separate |
+
+#### Path rules (important)
+
+- **End both folder paths with a backslash** (`\`). File names are appended directly to the path.
+- **`targetFolderPath` must match exactly what the upload extractor used.** The extractor finds each file's CDF instance by hashing its full target path. A different drive letter, casing, or missing backslash means instances won't be found or deleted.
+- Use absolute paths everywhere, including the log path. Scheduled tasks don't always start in the install folder.
+
+#### Logging options
+
+| Setting | Meaning |
+|---------|---------|
+| `console.level` | Detail shown in the console (`INFO` is usual) |
+| `file.level` | Detail written to the log file (`DEBUG` is usual) |
+| `file.path` | Log file location. The folder is created if missing |
+| `file.per_run` | `true` writes one log file per run, named with the run ID. `false` appends to a single file |
+| `file.retention` | With `per_run: true`, deletes this site's log files older than N days. `0` keeps everything |
+
+The whole `logger` section is optional. Without it, output goes to the console only.
+
+### 3. Create a launcher for the site
+
+Create `run_mtz.bat` in the install folder:
+
+```bat
+@echo off
+cd /d D:\Cognite_psaas\FileDeleteExtractor
+edms_delete-0.1.0-win32.exe .env ep_src_indp_edms_deletes_mtz
+```
+
+The `cd /d` line makes sure `.env` is found no matter how the batch file is started.
+
+### 4. Test the site manually
+
+Before scheduling, confirm in the metadata table that only the intended files have `Cognite_Delete = 1`. Then run the batch file from a command prompt:
+
+```powershell
+D:\Cognite_psaas\FileDeleteExtractor\run_mtz.bat
+```
+
+See [Checking that a run worked](#checking-that-a-run-worked) for what to expect.
 
 ---
 
-## Deletion eligibility
+## Scheduling runs
 
-A resource identifier is included in a delete list only when **all** of the following hold on the delete-tracker dataframe:
+Create one Windows Task Scheduler task per site.
 
-1. `CurrentDeleteFlag == True` (metadata had `Cognite_Delete == 1` when state was generated)
-2. The relevant `Does*ExistBeforeStatus` column is the boolean `True` (string/`N/A` values do not qualify)
-3. `RunId` equals the current run’s ID
+1. Open **Task Scheduler** and choose **Create Task**.
+2. **General:** name it, e.g. `EDMS Delete - mtz`. Select **Run whether user is logged on or not** and use the account that has delete rights on the site folders.
+3. **Triggers:** choose the schedule, e.g. daily at 02:00.
+4. **Actions:** **Start a program**, with Program `D:\Cognite_psaas\FileDeleteExtractor\run_mtz.bat` and Start in `D:\Cognite_psaas\FileDeleteExtractor`.
+5. **Settings:** set **If the task is already running** to **Do not start a new instance**.
 
-So the script only attempts to delete what it observed as present at state-generation time for this run’s flagged rows.
-
----
-
-## Deletion operations
-
-### Data model instances
-
-- Builds `NodeId(space=instanceSpace, external_id=...)` for each eligible ID.
-- Calls `data_modeling.instances.delete`.
-- Re-lists instances from the same view/space to verify.
-- `deleted_actual` = IDs present before but not after; `failed_to_delete` = requested minus actually deleted.
-
-### State-store RAW rows
-
-- Deletes RAW keys matching the eligible external IDs.
-- Re-retrieves the full table to verify.
-- Same actual/failed accounting as instances.
-
-### VM files (target and DWG drop)
-
-- For each requested path, if it is an existing file, calls `os.remove`.
-- Re-scans the directory to verify.
-- `deleted_actual` = paths present in the directory before but not after.
-- Paths that were never on disk, or could not be verified as gone, appear in `failed_to_delete` (warned in logs).
+Different sites can run at the same time, because each site writes to its own tables. Don't run two tasks for the **same** site at once.
 
 ---
 
-## Tracker columns and semantics
+## Checking that a run worked
 
-### Delete tracker (`rawTableDeleteTrackerTbl`)
+### Console or log file
 
-Row key: `{RunId}|{primary_key}`.
+A healthy run looks like this:
 
-| Column group | Meaning |
-|--------------|---------|
-| Identity / paths | `primary_key`, `sourceId`, `File_Type_Short_Name`, `external_id`, `target_filepath_defined`, `dwg_drop_path_defined`, `Cognite_Id` |
-| Run control | `RunId`, `runstart`, `runend`, `runFinished`, `CurrentDeleteFlag` |
-| Before status | `DoesInstanceExistBeforeStatus`, `DoesStateStoreRecordExistBeforeStatus`, `DoesTargetFolderPathExistBeforeStatus`, `DoesDwgDropFolderPathExistBeforeStatus` |
-| After status | Matching `Does*ExistAfterStatus` columns filled after deletion |
-| Delete timestamps | `DeletedInstanceTimestamp`, `DeletedStateStoreRecordTimestamp`, `DeletedTargetFolderPathTimestamp`, `DeletedDwgDropFolderPathTimestamp` — set only on successful verified deletes |
+```text
+INFO - Cognite client authenticated.
+INFO - Loading pipeline config: ep_src_indp_edms_deletes_mtz
+INFO - edms_delete.runner - RunId: 07e752b8a0365018b238329255f6db27
+INFO - edms_delete.runner - Built in-memory delete state for 36 flagged file(s).
+INFO - edms_delete.delete_operations - Deleted 3 instances from view CogniteFile (space=cdf_cdm, version=v1).
+INFO - edms_delete.delete_operations - Deleted 3 rows from db_edms_files_upload_ref.tbl_edms_files_mtz_state
+INFO - edms_delete.delete_operations - Deleted 1 files from directory D:\Data\edms\dwg-drop\mtz\
+INFO - edms_delete.delete_operations - Deleted 3 files from directory D:\Data\edms\target\mtz\
+INFO - edms_delete.runner - Completed run 07e752b8...; wrote 3 tracker rows.
+INFO - edms_delete.runner - Upserted run summary for 07e752b8... (runFinished=True) ...
+```
 
-Delete state is built in memory with after-status and delete-timestamp columns set to `null` and `runFinished` to `False`. After deletions, only rows with at least one delete timestamp are written (`runend` / `runFinished` set).
+`Deleted 0 ...` is normal when flagged files were already removed by an earlier run.
+
+### In CDF RAW
+
+- The **summary table** has a row for the run ID with `runFinished = True`.
+- The **delete tracker** has one row per file that had something deleted this run.
+
+A summary row stuck at `runFinished = False` means the run stopped partway. Check that run's log file.
+
+A warning like `You are using version='7.x' of the SDK, however version='8.x' is available` is harmless.
+
+---
+
+## What gets written to CDF
+
+Both tables live in `rawDbDeletionExtractor`. Each always keeps a placeholder row with the key `DummyRowKey` so the table's columns stay defined. Leave it in place; the extractor re-adds it if it's removed.
 
 ### Run summary (`rawTableDeletionExtractorSummary`)
 
-Row key: `{RunId}`. One row per script run.
+One row per run, keyed by run ID. It's written when the run starts and updated when the run finishes.
 
 | Column | Meaning |
 |--------|---------|
-| `RunId` | Generated at the start of the run (same ID as the delete tracker) |
-| `runstart` | Written on the preliminary insert |
-| `runend` | `null` until finalize; then the run end timestamp |
-| `runFinished` | `false` on the preliminary insert; `true` after finalize |
+| `RunId` | Unique ID for the run |
+| `runstart` | When the run started (UTC) |
+| `runend` | When the run finished (UTC). Empty while the run is in progress |
+| `runFinished` | `False` while the run is in progress, `True` once it completes |
 
-A crashed or killed run can leave a summary row with `runFinished` still `false` and `runend` null. The delete tracker is only written at the end, and only for files that actually had a deletion.
+### Delete tracker (`rawTableDeleteTrackerTbl`)
 
-### Dummy rows
+One row per file **that had at least one item deleted** in a run, keyed by `{RunId}|{primary_key}`. Files that were flagged but had nothing left to delete aren't written.
 
-If the delete tracker or run-summary table is missing or empty, a single `DummyRowKey` row is inserted so the table has a known schema. That dummy row is always kept on both tables. If it is missing from a non-empty table, it is re-inserted on load.
+| Column group | Columns |
+|--------------|---------|
+| File identity | `primary_key`, `sourceId`, `File_Type_Short_Name`, `Cognite_Id`, `Cognite_Ingest`, `external_id`, `target_filepath_defined`, `dwg_drop_path_defined` |
+| Run | `RunId`, `runstart`, `runend`, `runFinished`, `CurrentDeleteFlag` |
+| Found before delete | `DoesInstanceExistBeforeStatus`, `DoesStateStoreRecordExistBeforeStatus`, `DoesTargetFolderPathExistBeforeStatus`, `DoesDwgDropFolderPathExistBeforeStatus` |
+| Still present after delete | Matching `Does*ExistAfterStatus` columns |
+| When it was deleted | `DeletedInstanceTimestamp`, `DeletedStateStoreRecordTimestamp`, `DeletedTargetFolderPathTimestamp`, `DeletedDwgDropFolderPathTimestamp` |
 
----
+A delete timestamp is set only when that item was confirmed gone after the delete. A row can have some timestamps set and others empty, e.g. when only the target file still existed.
 
-## Logging
-
-- Console logging is always configured (default INFO unless overridden).
-- Optional file logging is driven by the pipeline `logger` section.
-- With `per_run: true`, the effective filename is `{stem}_{RunId}{suffix}` unless `{run_id}` is embedded in `path`.
-- With `retention > 0` and `per_run: true`, older log files in the same folder whose names start with `{stem}_` are deleted after the retention window.
-
----
-
-## Run locally
-
-```powershell
-cd edms-delete
-poetry run python edms_delete/__main__.py .env <pipeline_external_id>
-```
-
-Or via the installed script entry point:
-
-```powershell
-poetry run edms_delete .env ep_src_indp_edms_<site>
-```
-
-Arguments:
-
-1. Path to `.env` (CDF / IdP credentials)
-2. Extraction pipeline external ID whose YAML configures this site’s tables and folders
-
-On missing args, failed auth, or invalid pipeline config, the process exits with code `1`.
+The DWG drop-folder columns apply only to `DWG` and `DGN` files.
 
 ---
 
-## Build executable
+## Troubleshooting
+
+| Symptom | Likely cause | Fix |
+|---------|--------------|-----|
+| `Missing required arguments` | Batch file is missing the `.env` path or pipeline ID | Use `edms_delete-0.1.0-win32.exe .env ep_src_indp_edms_deletes_<site>` |
+| `Failed to initialize Cognite Client` or `Could not verify Cognite connection` | Wrong or missing `.env` values, expired secret, or no network to CDF | Check the `.env` values and that the task starts in the install folder |
+| `Not able to retrieve pipeline config` | Wrong pipeline external ID, or missing extraction config read access | Check the ID and the service principal's capabilities |
+| `Invalid pipeline configuration: 'rawTable...'` | A required key is missing or misspelled in the site config | Compare with the example in [Adding a site](#adding-a-site) |
+| HTTP 403 errors | Service principal lacks access to a database, table, or space | Add the capability for that resource |
+| Error creating the deletion-extractor database | RAW access is scoped and the database doesn't exist | Create the database in CDF first |
+| Flagged files are never deleted | `Cognite_Delete` isn't exactly `1`, folder paths are wrong, or `targetFolderPath` doesn't match the upload extractor | Check the metadata values and [path rules](#path-rules-important) |
+| `Deleted 0 files from directory ...` | Files already gone, or the task's account can't see or delete them | Check the folder contents and the account's permissions |
+| No log file | `logger.file.path` missing or relative | Set an absolute log path in the site config |
+
+---
+
+## Upgrading
+
+1. Pause the scheduled tasks.
+2. Replace the exe in the install folder with the new version.
+3. If the file name changed (e.g. `edms_delete-0.2.0-win32.exe`), update each `run_<site>.bat`.
+4. Apply any new config keys from the release notes to each site's extraction pipeline in CDF.
+5. Run one site manually, then re-enable the tasks.
+
+`.env` and the site configs don't need to change unless the release notes say so.
+
+---
+
+## Building the executable (developers)
+
+Requires Python 3.11–3.13 and Poetry.
 
 ```powershell
+poetry install
 poetry run python build_exe.py
 ```
 
-This generates `edms_delete.spec` (via PyInstaller / `cogex`) and builds:
+The build writes `dist\edms_delete-<version>-win32.exe`. To run from source instead:
 
-`dist/edms_delete-<version>-<platform>.exe`
+```powershell
+poetry run python edms_delete/__main__.py .env ep_src_indp_edms_deletes_<site>
+```
 
-Run the exe the same way as the module (pass `.env` path and pipeline external ID). Prefer absolute log and folder paths in the pipeline config when scheduling the exe (working directory may not be the install folder).
+`EXTRACTION_PIPELINE_CONFIG_EXAMPLE.yaml` has a complete example site config.
 
----
-
-## Package layout
+### Code layout
 
 | Module | Responsibility |
 |--------|----------------|
-| `edms_delete/__main__.py` | CLI: auth, load pipeline config, invoke runner |
-| `edms_delete/config.py` | `EdmsDeleteConfig` from pipeline YAML |
-| `edms_delete/runner.py` | End-to-end orchestration |
-| `edms_delete/state.py` | Build delete-state dataframes |
-| `edms_delete/tracker.py` | Delete-list selection and result application |
-| `edms_delete/delete_operations.py` | CDF instance, RAW, and VM file deletes |
-| `edms_delete/data_access.py` | RAW / instance loads and tracker bootstrap |
-| `edms_delete/paths.py` | `sourceId` and directory file listing helpers |
-| `edms_delete/utils/cdf_functions.py` | Cognite client + pipeline YAML load |
-| `edms_delete/utils/logging_setup.py` | Console / file logging from config |
-| `edms_delete/utils/time_utils.py` | UTC timestamps and `RunId` |
-
-Layout mirrors `csv-extractor` (pipeline-driven config, shared CDF client helpers).
-
----
-
-## Operational notes
-
-- **Idempotency:** Re-running after a successful run creates a new `RunId`. Rows already deleted will typically show before-status `False` and will not be re-queued. Files that were flagged but had nothing to delete are never written to the delete tracker.
-- **Partial success:** Each of the four delete channels is verified independently. A row can have some `Deleted*Timestamp` values set and others still null.
-- **DWG/DGN only for drop folder:** Non-CAD types never get a `dwg_drop_path_defined`; drop-folder before/after status stays N/A/`null`.
-- **Permissions:** The service principal needs rights to read/write the configured RAW DBs/tables, list/delete DM instances in the instance space, and read the extraction pipeline config. The OS user running the process needs delete rights on the VM folders.
-- **Trailing separators:** `targetFolderPath` and `dwgDropFolderPath` are concatenated directly with file names; include the trailing `\` (Windows) or `/` as used in your environment.
-- **Safety:** This tool permanently deletes CDF instances, RAW rows, and local files. Validate pipeline config and metadata flags in a non-production project before scheduling in production.
+| `edms_delete/__main__.py` | Command line: authenticate, load site config, start the run |
+| `edms_delete/config.py` | Parses the extraction pipeline YAML |
+| `edms_delete/runner.py` | Run order, tracker and summary writes |
+| `edms_delete/state.py` | Works out which files and items to delete |
+| `edms_delete/delete_operations.py` | Deletes CDF instances, state-store rows, and VM files |
+| `edms_delete/tracker.py` | Builds delete lists and records results |
+| `edms_delete/data_access.py` | RAW and data model reads, table creation |
+| `edms_delete/paths.py` | File name and folder listing helpers |
+| `edms_delete/utils/` | CDF client, logging, and time helpers |
