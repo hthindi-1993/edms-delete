@@ -190,26 +190,6 @@ logger:
 
 The whole `logger` section is optional. Without it, output goes to the console only.
 
-### 3. Create a launcher for the site
-
-Create `run_mtz.bat` in the install folder:
-
-```bat
-@echo off
-cd /d D:\Cognite_psaas\FileDeleteExtractor
-edms_delete-0.1.0-win32.exe .env ep_src_indp_edms_deletes_mtz
-```
-
-The `cd /d` line makes sure `.env` is found no matter how the batch file is started.
-
-### 4. Test the site manually
-
-Before scheduling, confirm in the metadata table that only the intended files have `Cognite_Delete = 1`. Then run the batch file from a command prompt:
-
-```powershell
-D:\Cognite_psaas\FileDeleteExtractor\run_mtz.bat
-```
-
 See [Checking that a run worked](#checking-that-a-run-worked) for what to expect.
 
 ---
@@ -218,13 +198,7 @@ See [Checking that a run worked](#checking-that-a-run-worked) for what to expect
 
 Create one Windows Task Scheduler task per site.
 
-1. Open **Task Scheduler** and choose **Create Task**.
-2. **General:** name it, e.g. `EDMS Delete - mtz`. Select **Run whether user is logged on or not** and use the account that has delete rights on the site folders.
-3. **Triggers:** choose the schedule, e.g. daily at 02:00.
-4. **Actions:** **Start a program**, with Program `D:\Cognite_psaas\FileDeleteExtractor\run_mtz.bat` and Start in `D:\Cognite_psaas\FileDeleteExtractor`.
-5. **Settings:** set **If the task is already running** to **Do not start a new instance**.
-
-Different sites can run at the same time, because each site writes to its own tables. Don't run two tasks for the **same** site at once.
+1. Please contact Julia Patzak to access recording on how to deploy this to existing EDMS **Task Scheduler**.
 
 ---
 
@@ -332,7 +306,7 @@ The DWG drop-folder columns apply only to `DWG` and `DGN` files.
 
 1. Pause the scheduled tasks.
 2. Replace the exe in the install folder with the new version.
-3. If the file name changed (e.g. `edms_delete-0.2.0-win32.exe`), update each `run_<site>.bat`.
+3. If the file name changed (e.g. `edms_delete-0.2.0-win32.exe`), update each task in the Windows Task Scheduler in the VMs.
 4. Apply any new config keys from the release notes to each site's extraction pipeline in CDF.
 5. Run one site manually, then re-enable the tasks.
 
