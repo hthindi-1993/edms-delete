@@ -486,7 +486,7 @@ pydantic = ">=2.8.2"
 pyhumps = ">=3.8.0"
 python-dotenv = ">=1.0.0"
 pyyaml = ">=5.3.0,<7"
-simple-winservice = {version = ">=0.1.0", markers = "sys_platform == \"win32\""}
+simple-winservice = {version = ">=1.0.0", markers = "sys_platform == \"win32\""}
 typing-extensions = ">=3.7.4,<5"
 
 [package.extras]

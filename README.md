@@ -33,7 +33,7 @@ One executable and one credentials file serve every site. What changes per site 
 
 ```text
 VM
-├── edms_delete-0.1.0-win32.exe      one copy, shared by all sites
+├── edms_delete-1.0.0-win32.exe      one copy, shared by all sites
 ├── .env                             CDF credentials, shared by all sites
 └── Logs\
 
@@ -45,7 +45,7 @@ CDF
 Each run takes two arguments: the `.env` file and the extraction pipeline external ID for that site.
 
 ```powershell
-edms_delete-0.1.0-win32.exe .env ep_src_indp_edms_deletes_mtz
+edms_delete-1.0.0-win32.exe .env ep_src_indp_edms_deletes_mtz
 ```
 
 The extractor reads the site's configuration from CDF at startup, so changing a site's tables or folders means editing its extraction pipeline config in CDF. You don't need to redeploy anything on the VM.
@@ -97,7 +97,7 @@ The extractor creates the deletion-extractor database and its tables if they are
 
 ### 1. Create an install folder
 
-For example `D:\Cognite_psaas\FileDeleteExtractor\`, and copy `edms_delete-0.1.0-win32.exe` into it.
+For example `D:\Cognite_psaas\FileDeleteExtractor\`, and copy `edms_delete-1.0.0-win32.exe` into it.
 
 ### 2. Create the `.env` credentials file
 
@@ -291,7 +291,7 @@ The DWG drop-folder columns apply only to `DWG` and `DGN` files.
 
 | Symptom | Likely cause | Fix |
 |---------|--------------|-----|
-| `Missing required arguments` | Batch file is missing the `.env` path or pipeline ID | Use `edms_delete-0.1.0-win32.exe .env ep_src_indp_edms_deletes_<site>` |
+| `Missing required arguments` | Batch file is missing the `.env` path or pipeline ID | Use `edms_delete-1.0.0-win32.exe .env ep_src_indp_edms_deletes_<site>` |
 | `Failed to initialize Cognite Client` or `Could not verify Cognite connection` | Wrong or missing `.env` values, expired secret, or no network to CDF | Check the `.env` values and that the task starts in the install folder |
 | `Not able to retrieve pipeline config` | Wrong pipeline external ID, or missing extraction config read access | Check the ID and the service principal's capabilities |
 | `Invalid pipeline configuration: 'rawTable...'` | A required key is missing or misspelled in the site config | Compare with the example in [Adding a site](#adding-a-site) |
