@@ -81,6 +81,7 @@ class EdmsDeleteRunner:
             nowtime=nowtime,
             runid=runid,
         )
+        delete_state_df = delete_tracker_tbl_df.copy()
 
         delete_list_instances = self._get_delete_list(
             delete_tracker_tbl_df,
@@ -145,18 +146,31 @@ class EdmsDeleteRunner:
 
         run_end_timestamp = self._finalize_run(delete_tracker_tbl_df, runid)
         stats = {
-            "FileInstances": self._build_operation_stats(delete_instance_results),
-            "StateStore": self._build_operation_stats(delete_statestore_results),
-            "Target": self._build_operation_stats(delete_targetfiles_results),
-            "DwgDrop": self._build_operation_stats(delete_dwgdropfiles_results),
+            "FileInstances": self._build_operation_stats(delete_state_df, "external_id", delete_instance_results),
+            "StateStore": self._build_operation_stats(delete_state_df, "external_id", delete_statestore_results),
+            "Target": self._build_operation_stats(
+                delete_state_df, "target_filepath_defined", delete_targetfiles_results
+            ),
+            "DwgDrop": self._build_operation_stats(
+                delete_state_df, "dwg_drop_path_defined", delete_dwgdropfiles_results
+            ),
         }
         self._upsert_run_summary(runid, nowtime, run_end_timestamp, True, stats)
 
     @staticmethod
-    def _build_operation_stats(delete_results: dict[str, Any]) -> dict[str, int]:
-        requested = set(delete_results.get("deleted_input", []))
-        actual = requested & set(delete_results.get("deleted_actual", []))
-        return {"Requested": len(requested), "Actual": len(actual)}
+    def _build_operation_stats(
+        delete_state_df: pd.DataFrame,
+        identifier_col: str,
+        delete_results: dict[str, Any],
+    ) -> dict[str, int]:
+        if identifier_col not in delete_state_df.columns:
+            return {"Requested": 0, "Actual": 0}
+        requested = delete_state_df[identifier_col].dropna()
+        deleted_actual = set(delete_results.get("deleted_actual", []))
+        return {
+            "Requested": len(requested),
+            "Actual": int(requested.isin(deleted_actual).sum()),
+        }
 
     def _get_delete_list(
         self,

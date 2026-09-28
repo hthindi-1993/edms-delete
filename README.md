@@ -276,7 +276,7 @@ One row per run, keyed by run ID. It's written when the run starts and updated w
 | `runFinished` | `False` while the run is in progress, `True` once it completes |
 | `stats` | Per-source delete counts for the run. Empty while the run is in progress |
 
-`stats` has one entry per source. `Requested` is how many items the run tried to delete. `Actual` is how many of those were confirmed gone afterwards.
+`stats` has one entry per source. `Requested` is how many files flagged with `Cognite_Delete = 1` apply to that source this run, whether or not the item still existed. `DwgDrop` only counts DWG and DGN files. `Actual` is how many of those were confirmed deleted during the run.
 
 ```json
 {
