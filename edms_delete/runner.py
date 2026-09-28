@@ -144,7 +144,19 @@ class EdmsDeleteRunner:
             delete_tracker_tbl_df = self._keep_rows_with_deletion_timestamps(delete_tracker_tbl_df, runid)
 
         run_end_timestamp = self._finalize_run(delete_tracker_tbl_df, runid)
-        self._upsert_run_summary(runid, nowtime, run_end_timestamp, True)
+        stats = {
+            "FileInstances": self._build_operation_stats(delete_instance_results),
+            "StateStore": self._build_operation_stats(delete_statestore_results),
+            "Target": self._build_operation_stats(delete_targetfiles_results),
+            "DwgDrop": self._build_operation_stats(delete_dwgdropfiles_results),
+        }
+        self._upsert_run_summary(runid, nowtime, run_end_timestamp, True, stats)
+
+    @staticmethod
+    def _build_operation_stats(delete_results: dict[str, Any]) -> dict[str, int]:
+        requested = set(delete_results.get("deleted_input", []))
+        actual = requested & set(delete_results.get("deleted_actual", []))
+        return {"Requested": len(requested), "Actual": len(actual)}
 
     def _get_delete_list(
         self,
@@ -335,6 +347,7 @@ class EdmsDeleteRunner:
         runstart: str,
         runend: str | None,
         run_finished: bool,
+        stats: dict[str, dict[str, int]] | None = None,
     ) -> None:
         get_run_summary_tbl(
             self.client,
@@ -342,23 +355,18 @@ class EdmsDeleteRunner:
             self.config.raw_table_deletion_extractor_summary,
         )
 
-        summary_df = pd.DataFrame(
-            [
-                {
-                    "key": runid,
+        self.client.raw.rows.insert(
+            db_name=self.config.raw_db_deletion_extractor,
+            table_name=self.config.raw_table_deletion_extractor_summary,
+            row={
+                runid: {
                     "RunId": runid,
                     "runstart": runstart,
                     "runend": runend,
                     "runFinished": run_finished,
+                    "stats": stats,
                 }
-            ]
-        ).set_index("key")
-        summary_df = summary_df.astype("object").where(summary_df.notna(), None)
-
-        self.client.raw.rows.insert_dataframe(
-            db_name=self.config.raw_db_deletion_extractor,
-            table_name=self.config.raw_table_deletion_extractor_summary,
-            dataframe=summary_df,
+            },
         )
         logger.info(
             "Upserted run summary for %s (runFinished=%s) to %s.%s.",

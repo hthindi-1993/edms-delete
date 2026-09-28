@@ -208,5 +208,6 @@ def get_run_summary_tbl(
         "runstart": "0101-01-01 00:00:00",
         "runend": "0101-01-01 00:00:00",
         "runFinished": "N/A",
+        "stats": "N/A",
     }
     return ensure_raw_table_with_dummy_row(client, db_config, tbl_config, dummy_values)

@@ -8,7 +8,7 @@ The EDMS Delete Extractor removes EDMS files that have been flagged for deletion
 
 Every run is recorded in CDF RAW so you can audit what was deleted and when.
 
-> **Warning:** This tool permanently deletes CDF instances, RAW rows, and files on disk. Validate each site's configuration and metadata flags in a test environment before scheduling it in production.
+> **Warning:** This tool permanently deletes CDF File instances, RAW rows that are generated from the file extractor, and files on disk. Validate each site's configuration and metadata flags in a test environment before scheduling it in production.
 
 ---
 
@@ -35,8 +35,6 @@ One executable and one credentials file serve every site. What changes per site 
 VM
 ├── edms_delete-0.1.0-win32.exe      one copy, shared by all sites
 ├── .env                             CDF credentials, shared by all sites
-├── run_mtz.bat                      one small launcher per site
-├── run_abc.bat
 └── Logs\
 
 CDF
@@ -165,12 +163,12 @@ logger:
 
 | Setting | Shared or per site | Notes |
 |---------|--------------------|-------|
-| `rawDbMetadata`, `rawDbFileStateStore`, `rawDbDeletionExtractor` | Usually shared | One database can hold tables for many sites |
+| `rawDbMetadata`, `rawDbFileStateStore`, `rawDbDeletionExtractor` | shared | One database can hold tables for many sites |
 | `rawTableMetadata`, `rawTableFileStateStore` | Per site | Must match the tables the upload process already uses |
 | `rawTableDeleteTrackerTbl`, `rawTableDeletionExtractorSummary` | Per site | Give each site its own tables |
 | `instanceSpace` | Per site | Space holding that site's `CogniteFile` instances |
 | `schemaSpace`, `dmExternalId`, `viewName`, `version` | Shared | Leave as shown unless you use a different view |
-| `instanceExternalIdPrefix` | Usually shared | Must match the upload extractor's prefix |
+| `instanceExternalIdPrefix` | shared | Must match the upload extractor's prefix |
 | `targetFolderPath`, `dwgDropFolderPath` | Per site | See the path rules below |
 | `logger.file.path` | Per site | Keeps each site's logs separate |
 
@@ -276,6 +274,25 @@ One row per run, keyed by run ID. It's written when the run starts and updated w
 | `runstart` | When the run started (UTC) |
 | `runend` | When the run finished (UTC). Empty while the run is in progress |
 | `runFinished` | `False` while the run is in progress, `True` once it completes |
+| `stats` | Per-source delete counts for the run. Empty while the run is in progress |
+
+`stats` has one entry per source. `Requested` is how many items the run tried to delete. `Actual` is how many of those were confirmed gone afterwards.
+
+```json
+{
+  "FileInstances": {"Requested": 10, "Actual": 5},
+  "StateStore": {"Requested": 10, "Actual": 5},
+  "Target": {"Requested": 10, "Actual": 5},
+  "DwgDrop": {"Requested": 10, "Actual": 5}
+}
+```
+
+| Key | Source |
+|-----|--------|
+| `FileInstances` | `CogniteFile` instances in CDF |
+| `StateStore` | File state-store RAW rows |
+| `Target` | Files in the target folder |
+| `DwgDrop` | DWG/DGN files in the DWG drop folder |
 
 ### Delete tracker (`rawTableDeleteTrackerTbl`)
 
